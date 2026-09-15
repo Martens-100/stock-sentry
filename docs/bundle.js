@@ -1,4 +1,4 @@
-/*! StockSentry 静态运行时 —— 由 build-static.js 于 2026-09-15T11:45:42.448Z 自动生成，请勿手工编辑 */
+/*! StockSentry 静态运行时 —— 由 build-static.js 自动生成，请勿手工编辑。源码见 lib/ */
 (function () {
 'use strict';
 

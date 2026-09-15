@@ -60,7 +60,7 @@ function build() {
   const profiles = fs.readFileSync(path.join(ROOT, 'data', 'profiles.json'), 'utf8');
   JSON.parse(profiles); // 提前校验 JSON 合法性
 
-  const bundle = `/*! StockSentry 静态运行时 —— 由 build-static.js 于 ${new Date().toISOString()} 自动生成，请勿手工编辑 */
+  const bundle = `/*! StockSentry 静态运行时 —— 由 build-static.js 自动生成，请勿手工编辑。源码见 lib/ */
 (function () {
 'use strict';
 
