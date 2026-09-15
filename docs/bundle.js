@@ -1,4 +1,4 @@
-/*! StockSentry 静态运行时 —— 由 build-static.js 于 2026-09-15T11:30:27.546Z 自动生成，请勿手工编辑 */
+/*! StockSentry 静态运行时 —— 由 build-static.js 于 2026-09-15T11:45:42.448Z 自动生成，请勿手工编辑 */
 (function () {
 'use strict';
 
@@ -1404,6 +1404,131 @@ function profileRules(ctx) {
 }
 
 /* ================================================================== */
+/* C. 通用监控清单（无画像标的的兜底）                                  */
+/* ================================================================== */
+/**
+ * 没有专项研报画像时，用实时技术状态生成一套等价的盯盘清单。
+ *
+ * 为什么需要：画像清单来自投研文档，只有少数标的才有。此前的实现在无画像时
+ * 会把整张监控清单卡片隐藏掉，导致"盯了别的股票却看不到任何监控项"。
+ * 这里给出通用模板 —— 回答同样的三个问题：看什么、什么算好、什么算坏。
+ *
+ * 注意：生成的是"观察清单"（该盯哪些位、什么条件触发），不重复产出信号；
+ * 各项是否触发由既有的技术规则负责判定。
+ */
+function genericMonitors(ctx) {
+  const { ind, quote } = ctx;
+  if (!ind) return [];
+
+  const n2 = (v) => (v == null || !Number.isFinite(v) ? '—' : Number(v).toFixed(2));
+  const ma = ind.ma || {};
+  const kdj = ind.kdj || {};
+  const rows = [];
+  const push = (m) => rows.push(m);
+
+  /* 1. 趋势结构 */
+  push({
+    dim: '趋势结构',
+    metric: `MA20 ${n2(ma.ma20)} / MA60 ${n2(ma.ma60)}`,
+    window: '每日收盘',
+    bull: '价格站上 MA20，且 MA20 走平或上翘',
+    bear: '收盘跌破 MA60，且 MA60 拐头向下',
+    weight: 10,
+    now: ind.maArrangement === 'bull' ? '多头排列'
+      : ind.maArrangement === 'bear' ? '空头排列'
+        : ind.price > ma.ma20 ? '价格在 MA20 上方，均线纠缠' : '价格在 MA20 下方，均线纠缠'
+  });
+
+  /* 2. 中期支撑 */
+  push({
+    dim: '中期支撑',
+    metric: `MA20 支撑位 ${n2(ma.ma20)}`,
+    window: '每日',
+    bull: `回踩 ${n2(ma.ma20)} 附近不破并收出阳线`,
+    bear: `有效跌破 ${n2(ma.ma20)}（收盘价连续 2 日在下方）`,
+    weight: 9,
+    now: `现价 ${n2(ind.price)}，偏离 MA20 ${ma.ma20 ? (((ind.price - ma.ma20) / ma.ma20) * 100).toFixed(2) : '—'}%`
+  });
+
+  /* 3. MACD 动能 */
+  push({
+    dim: 'MACD 动能',
+    metric: `DIF ${n2(ind.macd?.dif)} / DEA ${n2(ind.macd?.dea)}`,
+    window: '每日',
+    bull: 'DIF 上穿 DEA 形成金叉，且 DIF 站上零轴',
+    bear: 'DIF 下穿 DEA 形成死叉，且绿柱持续放大',
+    weight: 8,
+    now: ind.macd ? `${ind.macd.dif >= ind.macd.dea ? 'DIF 在 DEA 上方' : 'DIF 在 DEA 下方'}，红绿柱 ${n2(ind.macd.hist)}` : '—'
+  });
+
+  /* 4. RSI 强弱 */
+  push({
+    dim: 'RSI 强弱',
+    metric: `RSI(14) ${n2(ind.rsi)}`,
+    window: '每日',
+    bull: 'RSI 上穿 50 并站稳',
+    bear: 'RSI 跌破 30，或自 80 以上高位掉头',
+    weight: 7,
+    now: ind.rsi == null ? '—'
+      : ind.rsi >= 80 ? '超买区，警惕回落'
+        : ind.rsi <= 30 ? '超卖区，存在反弹需求'
+          : ind.rsi >= 50 ? '中性偏强' : '中性偏弱'
+  });
+
+  /* 5. 布林轨道 */
+  push({
+    dim: '布林轨道',
+    metric: `上轨 ${n2(ind.boll?.up)} / 中轨 ${n2(ind.boll?.mid)} / 下轨 ${n2(ind.boll?.dn)}`,
+    window: '每日',
+    bull: '收复中轨，并向中轨上方扩展',
+    bear: '跌破下轨，或上轨遇阻后放量回落',
+    weight: 8,
+    now: ind.bollInfo
+      ? `%B ${(ind.bollInfo.pctB * 100).toFixed(0)}%，带宽 ${ind.bollInfo.bandwidthPct}%（历史分位 ${ind.bollInfo.bandwidthPctile}%）${ind.bollInfo.stateLabel}`
+      : '—'
+  });
+
+  /* 6. 回归导轨 */
+  push({
+    dim: '回归导轨',
+    metric: `导轨 ${n2(ind.rails?.dn)} ~ ${n2(ind.rails?.up)}（${ind.rails?.bars || '—'} 根，k=${ind.rails?.k ?? '—'}）`,
+    window: '每日',
+    bull: '上升导轨中回踩下沿获支撑',
+    bear: '下降导轨中跌破下轨，趋势延续',
+    weight: 8,
+    now: ind.rails
+      ? `${ind.rails.dir === 'up' ? '上升导轨' : ind.rails.dir === 'down' ? '下降导轨' : '水平导轨'}｜斜率 ${ind.rails.slope20Pct}%/20日｜通道位置 ${(ind.rails.pctChan * 100).toFixed(0)}%`
+      : '—'
+  });
+
+  /* 7. 量价配合 */
+  push({
+    dim: '量价配合',
+    metric: `量比 ${quote?.volumeRatio == null ? '—' : quote.volumeRatio} / 换手 ${quote?.turnover == null ? '—' : quote.turnover + '%'}`,
+    window: '每日',
+    bull: '放量突破关键阻力位（量比 > 1.5）',
+    bear: '放量下跌或缩量反弹无力',
+    weight: 7,
+    now: quote?.volumeRatio == null ? '—'
+      : quote.volumeRatio >= 1.5 ? '明显放量'
+        : quote.volumeRatio <= 0.7 ? '明显缩量' : '量能正常'
+  });
+
+  /* 8. 关键区间 */
+  push({
+    dim: '关键区间',
+    metric: `20日 ${n2(ind.donchian?.lower)} ~ ${n2(ind.donchian?.upper)}`,
+    window: '每日',
+    bull: '突破 20 日高点并有效站稳',
+    bear: '跌破 20 日低点',
+    weight: 7,
+    now: `区间位置 ${ind.donchian?.pct ?? '—'}%｜52周位置 ${ind.position52 ?? '—'}%`
+  });
+
+  return rows;
+}
+
+/* ================================================================== */
 /* 评分                                                                */
 /* ================================================================== */
 function scoreSignals(signals, filter) {
@@ -1419,7 +1544,7 @@ function scoreSignals(signals, filter) {
   return clamp(Math.round(50 + 45 * (num / den)), 2, 98);
 }
 
-module.exports = { technicalRules, channelRules, profileRules, scoreSignals, clamp };
+module.exports = { technicalRules, channelRules, profileRules, genericMonitors, scoreSignals, clamp };
 
 });
 
@@ -1449,11 +1574,18 @@ function signalTable(signals) {
   return ['| 方向 | 维度 | 信号 | 判读 | 数据依据 |', '| --- | --- | --- | --- | --- |', ...rows].join('\n');
 }
 
-function monitorTable(monitors) {
-  if (!monitors?.length) return '_该标的未配置专项监控清单，建议补充投研文档后回填。_';
-  const rows = monitors.map((m) =>
-    `| ${m.dim} | ${m.metric} | ${m.window} | 🔴 ${m.bull} | 🟢 ${m.bear} | ${m.weight} |`);
-  return ['| 跟踪维度 | 关键指标 | 观察窗口 | 利好信号 | 利空信号 | 权重 |', '| --- | --- | --- | --- | --- | --- |', ...rows].join('\n');
+function monitorTable(monitors, source) {
+  if (!monitors?.length) return '_暂无可用的监控项（行情数据不足）。_';
+  const generic = source === 'generic';
+  const rows = monitors.map((m) => (generic
+    ? `| ${m.dim} | ${m.metric} | ${m.window} | 🔴 ${m.bull} | 🟢 ${m.bear} | ${m.now || '—'} | ${m.weight} |`
+    : `| ${m.dim} | ${m.metric} | ${m.window} | 🔴 ${m.bull} | 🟢 ${m.bear} | ${m.weight} |`));
+  const head = generic
+    ? ['| 跟踪维度 | 关键指标 | 观察窗口 | 利好信号 | 利空信号 | 当前状态 | 权重 |',
+      '| --- | --- | --- | --- | --- | --- | --- |']
+    : ['| 跟踪维度 | 关键指标 | 观察窗口 | 利好信号 | 利空信号 | 权重 |',
+      '| --- | --- | --- | --- | --- | --- |'];
+  return [...head, ...rows].join('\n');
 }
 
 /* ------------------------------------------------------------------ */
@@ -1708,7 +1840,11 @@ function buildReport(a) {
 
   L.push(`### 3. 核心监控清单（利好 / 利空双向）`);
   L.push('');
-  L.push(monitorTable(pf?.monitors));
+  if (a.monitorsSource === 'generic') {
+    L.push(`> 该标的尚未导入专项研报画像，以下为**通用技术模板**：由实时指标自动生成的观察清单，回答"该盯哪些位、什么条件算好、什么条件算坏"。导入该股研报后会自动升级为专项清单。`);
+    L.push('');
+  }
+  L.push(monitorTable(a.monitors || pf?.monitors, a.monitorsSource));
   L.push('');
 
   L.push(`### 4. 实时信号明细（${signals.all.length} 条）`);
@@ -2108,6 +2244,12 @@ async function analyze(code, opts = {}) {
   const bears = signals.filter((s) => s.side === 'bear');
   const neutrals = signals.filter((s) => s.side === 'neutral');
 
+  /* 监控清单：优先用画像里的专项清单；没有画像时退化为通用技术清单，
+     保证任何标的（含新加入自选股的）都能看到"看什么 / 什么算好 / 什么算坏" */
+  const profileMonitors = profile && Array.isArray(profile.monitors) ? profile.monitors : [];
+  const monitorsSource = profileMonitors.length ? 'profile' : 'generic';
+  const monitors = monitorsSource === 'profile' ? profileMonitors : rules.genericMonitors(ctx);
+
   return {
     code: c, market, name: quote.name || profile?.name || c,
     quote: {
@@ -2151,6 +2293,8 @@ async function analyze(code, opts = {}) {
       minutes: minutes.ticks || [],
       preClose: minutes.preClose || quote.preClose
     },
+    monitors,
+    monitorsSource,
     profile: profile ? {
       name: profile.name, tags: profile.tags, thesis: profile.thesis, moat: profile.moat,
       valuation: profile.valuation, levels: profile.levels, cost: profile.cost,

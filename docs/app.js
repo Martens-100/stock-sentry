@@ -222,17 +222,34 @@ function renderDetail(d) {
   $('#cntAll').textContent = d.signals.all.length;
   renderSignals();
 
-  /* 监控清单 */
-  const mons = d.profile?.monitors || [];
-  $('#monitorCard').hidden = !mons.length;
+  /* 监控清单：有专项画像就列画像清单，没有就列通用技术清单 —— 两种都必须显示 */
+  const mons = d.monitors || d.profile?.monitors || [];
+  const generic = (d.monitorsSource || (d.profile?.monitors?.length ? 'profile' : 'generic')) === 'generic';
+  $('#monitorCard').hidden = false;
+  $('#monitorTitle').textContent = '核心监控清单（利好 / 利空双向）';
+  const badge = $('#monitorBadge');
+  badge.hidden = false;
+  badge.className = 'src-badge ' + (generic ? 'generic' : 'profile');
+  badge.textContent = generic ? '通用技术模板 · 导入研报可升级为专项清单' : '专项清单 · 来自投研文档';
   if (mons.length) {
-    $('#monitorTableWrap').innerHTML = `<table class="data">
+    $('#monitorTableWrap').innerHTML = generic
+      ? `<table class="data">
+      <thead><tr><th>跟踪维度</th><th>关键指标</th><th>观察窗口</th><th>🔴 利好信号</th><th>🟢 利空信号</th><th>当前状态</th><th>权重</th></tr></thead>
+      <tbody>${mons.map((m) => `<tr>
+        <td><b>${m.dim}</b></td><td>${m.metric}</td><td>${m.window}</td>
+        <td style="color:var(--up)">${m.bull}</td><td style="color:var(--down)">${m.bear}</td>
+        <td class="mon-now">${m.now || '—'}</td>
+        <td>${'★'.repeat(Math.min(5, Math.round(m.weight / 2)))} ${m.weight}</td>
+      </tr>`).join('')}</tbody></table>`
+      : `<table class="data">
       <thead><tr><th>跟踪维度</th><th>关键指标</th><th>观察窗口</th><th>🔴 利好信号</th><th>🟢 利空信号</th><th>权重</th></tr></thead>
       <tbody>${mons.map((m) => `<tr>
         <td><b>${m.dim}</b></td><td>${m.metric}</td><td>${m.window}</td>
         <td style="color:var(--up)">${m.bull}</td><td style="color:var(--down)">${m.bear}</td>
         <td>${'★'.repeat(Math.min(5, Math.round(m.weight / 2)))} ${m.weight}</td>
       </tr>`).join('')}</tbody></table>`;
+  } else {
+    $('#monitorTableWrap').innerHTML = '<div class="hint">暂无可用监控项（行情数据不足）。</div>';
   }
 
   /* 画像 */
