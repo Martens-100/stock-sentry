@@ -1,0 +1,14 @@
+# 依赖
+node_modules/
+package-lock.json
+
+# 生成的报告文件（运行时产物）
+out/*
+!out/.gitkeep
+
+# 系统与日志
+.DS_Store
+*.log
+.env
+.idea/
+.vscode/

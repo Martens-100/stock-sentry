@@ -1,0 +1,24 @@
+{
+  "name": "stock-sentry",
+  "version": "1.0.0",
+  "description": "StockSentry · A股智能盯盘与投研报告自动生成系统",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "a-share",
+    "stock-monitor",
+    "technical-analysis",
+    "bollinger-bands",
+    "regression-channel",
+    "investment-research",
+    "quant"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "private": false,
+  "dependencies": {}
+}

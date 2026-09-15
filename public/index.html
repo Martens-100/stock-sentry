@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>StockSentry · 智能盯盘与投研生成系统</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">S</div>
+    <div>
+      <h1>StockSentry</h1>
+      <p>智能盯盘 · 信号反馈 · 投研报告自动生成</p>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <div class="clock">
+      <span id="clock">--:--:--</span>
+      <small id="marketState">—</small>
+    </div>
+    <label class="switch" title="自动刷新">
+      <input type="checkbox" id="autoRefresh" checked>
+      <span>自动盯盘 <b id="refreshSec">8</b>s</span>
+    </label>
+    <button class="btn ghost" id="refreshAll">立即刷新</button>
+  </div>
+</header>
+
+<main class="layout">
+  <aside class="sidebar">
+    <div class="side-block">
+      <div class="side-title">添加标的</div>
+      <div class="search-row">
+        <input id="searchInput" type="text" placeholder="代码 / 名称 / 拼音，如 000063、科伦" autocomplete="off">
+        <button class="btn primary" id="searchBtn">搜索</button>
+      </div>
+      <div id="searchResults" class="search-results"></div>
+    </div>
+
+    <div class="side-block grow">
+      <div class="side-title">自选盯盘 <span id="wlCount" class="pill">0</span></div>
+      <div id="watchlist" class="watchlist">
+        <div class="loading">加载中…</div>
+      </div>
+    </div>
+  </aside>
+
+  <section class="content">
+    <div id="empty" class="empty">
+      <div class="empty-icon">◎</div>
+      <h2>选择左侧标的开始盯盘</h2>
+      <p>系统将实时计算技术指标、生成利好/利空信号，并给出明确的入场与离场判定。</p>
+    </div>
+
+    <div id="detail" hidden>
+      <!-- 标的头部 -->
+      <div class="stock-head card">
+        <div class="sh-left">
+          <div class="sh-name">
+            <h2 id="sName">—</h2>
+            <span id="sCode" class="code">—</span>
+            <span id="sTags" class="tags"></span>
+          </div>
+          <div class="sh-price">
+            <span id="sPrice" class="price">—</span>
+            <span id="sChange" class="change">—</span>
+          </div>
+          <div class="sh-time" id="sTime">—</div>
+        </div>
+        <div class="sh-stats" id="sStats"></div>
+      </div>
+
+      <!-- 结论 + 评分 -->
+      <div class="grid-2">
+        <div class="card verdict" id="verdictCard">
+          <div class="card-title">盯盘结论</div>
+          <div class="verdict-main">
+            <div class="gauge">
+              <svg viewBox="0 0 120 120" id="gaugeSvg">
+                <circle cx="60" cy="60" r="52" class="gauge-bg"></circle>
+                <circle cx="60" cy="60" r="52" class="gauge-fg" id="gaugeFg"></circle>
+              </svg>
+              <div class="gauge-num"><b id="scoreNum">0</b><small>综合评分</small></div>
+            </div>
+            <div class="verdict-body">
+              <div id="actionLabel" class="action-label">—</div>
+              <div id="actionDesc" class="action-desc">—</div>
+              <div class="score-bars">
+                <div class="sb"><span>技术面</span><div class="bar"><i id="barTech"></i></div><b id="valTech">0</b></div>
+                <div class="sb"><span>策略面</span><div class="bar"><i id="barProfile"></i></div><b id="valProfile">0</b></div>
+                <div class="sb"><span>置信度</span><div class="bar"><i id="barConf"></i></div><b id="valConf">0</b></div>
+              </div>
+            </div>
+          </div>
+          <ul id="actionReasons" class="reasons"></ul>
+        </div>
+
+        <div class="card plan">
+          <div class="card-title">交易计划</div>
+          <div class="plan-grid" id="planGrid"></div>
+          <div class="plan-batches">
+            <div class="sub-title" id="batchTitle">分批建仓节奏</div>
+            <table id="batchTable" class="mini-table"></table>
+          </div>
+          <div class="plan-levels">
+            <div class="sub-title">关键支撑 / 阻力</div>
+            <div id="levelList" class="level-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 上下轨线与导轨区间 -->
+      <div class="card channel-card">
+        <div class="card-title">
+          上下轨线与导轨区间研判
+          <span class="chapter-note">布林三轨 · 回归导轨通道 · 唐奇安区间</span>
+        </div>
+        <div class="ch-zone-row">
+          <div class="ch-zone" id="chZone">—</div>
+          <div class="ch-advice" id="chAdvice">—</div>
+        </div>
+        <div class="channel-grid" id="chGrid"></div>
+        <div class="rail-viz" id="railViz"></div>
+      </div>
+
+      <!-- 图表 -->
+      <div class="card chart-card">
+        <div class="card-title">
+          分时走势
+          <span class="chart-legend"><i class="lg-price"></i>价格<i class="lg-avg"></i>均价</span>
+        </div>
+        <canvas id="minuteChart" height="220"></canvas>
+      </div>
+
+      <div class="card chart-card">
+        <div class="card-title">
+          K线 · 均线 · 上下轨 · 导轨通道 · 成交量 · MACD（近120个交易日）
+          <span class="chart-legend">
+            <i class="lg-ma5"></i>MA5<i class="lg-ma10"></i>MA10<i class="lg-ma20"></i>MA20<i class="lg-ma60"></i>MA60
+            <i class="lg-bollu"></i>布林上轨<i class="lg-bolld"></i>布林下轨<i class="lg-rail"></i>导轨通道
+          </span>
+        </div>
+        <div class="chart-toggles">
+          <label><input type="checkbox" id="tglBoll" checked> 布林上下轨</label>
+          <label><input type="checkbox" id="tglRail" checked> 回归导轨通道</label>
+          <label><input type="checkbox" id="tglMA" checked> 均线</label>
+        </div>
+        <canvas id="klineChart" height="380"></canvas>
+      </div>
+
+      <!-- 信号 -->
+      <div class="card">
+        <div class="card-title">
+          信号面板
+          <div class="tabs" id="signalTabs">
+            <button class="tab active" data-tab="bull">利好 <b id="cntBull">0</b></button>
+            <button class="tab" data-tab="bear">利空 <b id="cntBear">0</b></button>
+            <button class="tab" data-tab="neutral">中性 <b id="cntNeutral">0</b></button>
+            <button class="tab" data-tab="all">全部 <b id="cntAll">0</b></button>
+          </div>
+        </div>
+        <div id="signalList" class="signal-list"></div>
+      </div>
+
+      <!-- 监控清单 -->
+      <div class="card" id="monitorCard">
+        <div class="card-title">核心监控清单（利好 / 利空双向）</div>
+        <div id="monitorTableWrap"></div>
+      </div>
+
+      <!-- 画像 -->
+      <div class="card" id="profileCard">
+        <div class="card-title">个股画像（源自投研文档）</div>
+        <div id="profileBody"></div>
+      </div>
+
+      <!-- 报告 -->
+      <div class="card">
+        <div class="card-title">
+          投研报告与持仓攻略
+          <div class="report-actions">
+            <button class="btn primary" id="genReport">生成报告</button>
+            <button class="btn ghost" id="downloadHtml" disabled>下载 HTML</button>
+            <button class="btn ghost" id="downloadMd" disabled>下载 Markdown</button>
+          </div>
+        </div>
+        <div id="reportBody" class="report-body">
+          <div class="hint">点击「生成报告」，系统将按投研尽调模板（执行摘要 / 财务与估值 / 经营拆解 / 风险控制 / 筹码结构 / 团队研判 / 业绩节奏 / 持仓攻略）自动生成本标的的完整报告。</div>
+        </div>
+      </div>
+
+      <div class="disclaimer">
+        <b>免责声明：</b>以上内容基于公开数据和量化分析，仅供参考，不构成投资建议。市场有风险，投资需谨慎。任何投资决策应结合个人风险承受能力、资金状况和投资目标独立判断，必要时咨询持牌专业机构。过往表现不预示未来收益。
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>
