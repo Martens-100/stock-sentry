@@ -16,11 +16,21 @@
 
 ```bash
 cd stock-sentry
+cp .env.example .env     # 可选：需要自定义端口/跨域白名单/密钥时才要这一步
 node server.js
 # 浏览器打开 http://127.0.0.1:8848
 ```
 
-零第三方依赖，仅需 Node.js ≥ 18。默认端口 8848，可用 `PORT=9000 node server.js` 修改。
+零第三方依赖，仅需 Node.js ≥ 18。默认端口 8848，可用 `PORT=9000 node server.js` 修改，或写进 `.env`。
+
+常用命令：
+
+| 命令 | 作用 |
+|---|---|
+| `npm start` | 启动服务端 |
+| `npm run build:static` | 构建静态版到 `docs/`，**构建后自动做密钥扫描，命中即失败** |
+| `npm run check:secrets` | 只做密钥扫描（源码 + 产物） |
+| `npm run check` | 扫描 + 重建，提交前跑一次最稳 |
 
 ---
 
@@ -39,11 +49,86 @@ node build-static.js      # 生成 docs/ 目录（index.html + bundle.js + stati
 | 运行方式 | `node server.js` | 打开 `docs/index.html`（或托管到 Pages） |
 | 行情请求 | Node 转发 | **浏览器直连腾讯财经接口**（该接口已开放 `access-control-allow-origin: *`） |
 | 自选股存储 | 服务端 `data/watchlist.json` | 浏览器 `localStorage` |
-| 股票搜索 | 东方财富 suggest 接口 | 腾讯 smartbox JSONP 联想 |
+| 股票搜索 | 腾讯 smartbox（可选叠加东方财富） | 腾讯 smartbox JSONP 联想 |
 | 主力资金流 | 东方财富（大单口径） | 降级为**分时主动买卖估算**（东方财富接口无 CORS） |
 | 报告下载 | 写入 `out/` + 前端下载 | 纯前端 Blob 下载 |
 
 原理：`lib/` 下的核心模块（数据层 / 指标 / 规则 / 引擎 / 报告）全部写成**同构**代码，`build-static.js` 把它们打包进 `docs/bundle.js`（挂载到 `window.SentryLib`），再由 `static-api.js` 在浏览器内实现 `/api/*` 的全部接口。
+
+---
+
+## 密钥隔离与安全基线
+
+静态产物是**公开**的 —— 发布到 GitHub Pages 后任何人都能查看每一个字节。因此这里的思路不是"把 key 藏好"，而是**让 key 根本不存在于产物中**。
+
+### 三层防线
+
+| 层 | 机制 | 位置 |
+|---|---|---|
+| **源头** | 所有凭据只从服务端环境变量读取，源码中禁止出现字面量；未登记的密钥名会直接抛错 | `lib/config.js` |
+| **构建** | `@node-only` 区块在打包成浏览器产物时被**整段剥离**；产物生成后逐字节扫描，命中即**中止构建**（退出码 1） | `build-static.js` |
+| **运行时** | Host 头校验、跨域默认拒绝、分接口限流、错误脱敏、严格 CSP | `lib/guard.js` · `server.js` |
+
+### 1. 凭据只在一个地方读
+
+```js
+const cfg = require('./lib/config');
+
+cfg.secret('EASTMONEY_TOKEN');   // 未登记的密钥名 → 抛错，强制先登记
+cfg.option('PORT', 8848);        // 普通配置可以有默认值
+cfg.num('RATE_LIMIT_PER_MIN', 120);
+cfg.flag('TRUST_PROXY', false);
+```
+
+新增密钥的固定流程：`.env.example` 加说明 → `lib/config.js` 的 `SECRETS` 登记 → 业务代码用 `secret()` 取。
+本地配置写在 `.env`（已被 `.gitignore` 排除，且 `git check-ignore .env` 可自证），零依赖的 `.env` 加载器不会覆盖部署平台已设置的环境变量。
+
+### 2. `@node-only`：不打包，就无从扒取
+
+任何读取凭据、或只在服务端成立的代码，用区块标记包起来：
+
+```js
+/* @node-only */
+const token = cfg.secret('EASTMONEY_TOKEN');
+if (token) { /* ... 只有服务端会走这里 ... */ }
+/* @end-node-only */
+```
+
+`build-static.js` 会校验标记配对并整块删除，因此浏览器产物里**连调用凭据的代码都不存在**。当前被剥离的内容包括：`https`/`zlib` 引入、Node 请求分支、东方财富资金流与搜索分支、`.env` 读取逻辑。
+
+### 3. 构建闸门：宁可构建失败，也不发布带密钥的文件
+
+```bash
+npm run build:static      # 构建 + 自动扫描，发现有凭据 → 直接失败
+npm run check:secrets     # 只扫描（源码 + docs/ 产物）
+```
+
+扫描器覆盖：GitHub / OpenAI / AWS / Google / Slack / Stripe 等密钥格式、私钥文件、URL 查询串里的凭据、硬编码赋值、`Bearer` 字面量，以及产物中出现的 `process.env`；另有长十六进制串与 JWT 的启发式告警。扫描器**也会扫描自己**（denylist 用字符串拼接定义，因此本文件不含连续密钥字面量），并带一份"已泄漏值"黑名单。
+
+### 4. 服务端：防止接口被当作免费 API 扒
+
+| 措施 | 默认值 | 说明 |
+|---|---|---|
+| Host 头校验 | 开启 | IP 字面量与 `localhost`/`*.local` 放行，其余域名需 `TRUSTED_HOSTS`。**拦截 DNS Rebinding**（网页把 evil.com 解析到 127.0.0.1 后直连本机服务） |
+| 跨域 | 仅同源 | 已移除早前的 `Access-Control-Allow-Origin: *`；需要跨域时用 `ALLOWED_ORIGINS` 显式白名单 |
+| 限流 | 120 次/分；分析类 30 次/分 | 按「IP + 限额档」隔离，重接口额度不会被轻接口挤占 |
+| SSE 并发 | 4 / IP | 防止单机占满连接 |
+| 请求体 | 32 KB | 防内存耗尽 |
+| 错误响应 | 只回事件号 | 不再回显 `err.message`（可能含上游 URL、文件路径）；细节只进服务端日志 |
+| 静态服务 | 路径归一化 + 前缀校验 + 拒绝点开头文件 | 目录穿越与 `.env` 读取均返回 403/404 |
+| CSP | `default-src 'self'` | 另配 `nosniff` / `no-referrer` / `X-Frame-Options: DENY` / `CORP: same-origin` |
+
+启动时会打印当前安全基线，便于确认配置是否生效：
+
+```
+  ▸ 安全基线：
+      跨域        仅同源（默认拒绝跨域）
+      限流        120 次/分，分析类 30 次/分，SSE 并发 4
+      Host 校验   已开启
+      凭据        已登记 1 项，全部未配置（当前功能无需凭据）
+```
+
+> 部署到自定义域名时记得设置 `TRUSTED_HOSTS=<你的域名>`，否则 Host 校验会返回 403。
 
 ---
 
@@ -143,17 +228,25 @@ node build-static.js      # 生成 docs/ 目录（index.html + bundle.js + stati
 
 ```
 stock-sentry/
-├── server.js              # HTTP 服务：静态托管 + REST API + SSE
+├── server.js              # HTTP 服务：静态托管 + REST API + SSE + 安全基线
 ├── lib/
+│   ├── config.js          # 凭据与配置唯一入口（只读环境变量，浏览器端恒为空）
+│   ├── guard.js           # 防护层：限流 / Host 校验 / 跨域白名单 / 安全头 / 错误脱敏
 │   ├── source.js          # 多源行情层（腾讯主源 / 新浪备源 / 东财资金流），含 TTL 缓存与降级
 │   ├── tech.js            # 指标引擎：MA/EMA/MACD/RSI/KDJ/BOLL/ATR/枢轴/回归导轨/唐奇安/轨道研判
 │   ├── rules.js           # 信号规则引擎：通用技术规则 + 上下轨导轨规则 + 个股画像规则
 │   ├── engine.js          # 分析引擎：评分模型、动作判定、交易计划、风控修正
 │   └── report.js          # 报告生成器：8 章模板 + Markdown→HTML 渲染
+├── scripts/
+│   └── scan-secrets.js    # 密钥扫描器（源码 + 构建产物），命中即失败
+├── build-static.js        # 静态版打包：剥离 @node-only 区块 → 打包 → 扫描产物
+├── static-api.js          # 静态版后端替身：在浏览器内实现 /api/*
 ├── data/
 │   ├── profiles.json      # 画像库（从中兴通讯/科伦药业研报提取的规则与策略参数）
 │   └── watchlist.json     # 自选股与刷新频率
 ├── public/                # 前端（原生 JS + Canvas 自绘图表，无任何 CDN 依赖）
+├── docs/                  # 静态版产物（GitHub Pages 直接托管此目录）
+├── .env.example           # 环境变量模板（只写键名与说明，绝不写真实值）
 └── out/                   # 生成的报告文件
 ```
 

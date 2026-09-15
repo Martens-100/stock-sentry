@@ -2,6 +2,19 @@
 node_modules/
 package-lock.json
 
+# 环境变量与密钥 —— 绝不入库
+.env
+.env.*
+!.env.example
+
+# 密钥文件类
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json
+credentials.json
+
 # 生成的报告文件（运行时产物）
 out/*
 !out/.gitkeep
@@ -9,6 +22,5 @@ out/*
 # 系统与日志
 .DS_Store
 *.log
-.env
 .idea/
 .vscode/

@@ -1,10 +1,13 @@
 {
   "name": "stock-sentry",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "StockSentry · A股智能盯盘与投研报告自动生成系统",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build:static": "node build-static.js",
+    "check:secrets": "node scripts/scan-secrets.js",
+    "check": "node scripts/scan-secrets.js && node build-static.js"
   },
   "keywords": [
     "a-share",

@@ -1,4 +1,4 @@
-/*! StockSentry 静态运行时 —— 由 build-static.js 于 2026-09-15T10:27:09.383Z 自动生成，请勿手工编辑 */
+/*! StockSentry 静态运行时 —— 由 build-static.js 于 2026-09-15T11:30:27.546Z 自动生成，请勿手工编辑 */
 (function () {
 'use strict';
 
@@ -215,6 +215,82 @@ var PROFILES_DATA = {
 }
 ;
 
+/* ===== lib/config.js ===== */
+__define('config', function (module, exports, require) {
+'use strict';
+/**
+ * 凭据与运行配置的唯一入口。
+ *
+ * 三条铁律：
+ *   1. 源码里绝不出现任何密钥字面量 —— 一切敏感值只从服务端环境变量读取；
+ *   2. 任何读取密钥的代码必须包在 `@node-only` 区块内，打包成浏览器产物时会被整段剥离；
+ *   3. 浏览器侧一律拿到空字符串，静态产物里不存在凭据，也就无从"扒取"。
+ *
+ * 新增密钥的流程：在 .env.example 里加一行说明 → 在 SECRETS 登记表里登记 → 业务代码用 secret('名称') 取。
+ */
+const IS_NODE = typeof process !== 'undefined' && !!(process.versions && process.versions.node);
+
+
+/**
+ * 密钥登记表。name → 说明。
+ * 登记的意义：启动时能审计"哪些密钥已配置"，日志里能统一脱敏，扫描脚本也知道该盯哪些名字。
+ */
+const SECRETS = {
+  EASTMONEY_TOKEN: '东方财富股票联想接口 token（可选）。仅服务端使用；不配置则搜索走腾讯 smartbox，无需任何凭据。'
+};
+
+/** 读取环境变量。浏览器端恒返回空串，绝不回落到任何硬编码默认值。 */
+function readEnv(name) {
+  return '';
+}
+
+/** 取一个密钥。禁止给敏感项传 fallback —— 缺失就应该显式降级，而不是用一个人的 key 兜底给所有人。 */
+function secret(name) {
+  if (!(name in SECRETS)) {
+    throw new Error(`[config] 未登记的密钥 "${name}"：请先在 lib/config.js 的 SECRETS 中登记`);
+  }
+  return readEnv(name).trim();
+}
+
+function hasSecret(name) { return secret(name).length > 0; }
+
+/** 取普通配置项（非敏感），可以有安全的默认值。 */
+function option(name, fallback) {
+  const v = readEnv(name);
+  return v === '' ? fallback : v;
+}
+function num(name, fallback) {
+  const v = parseFloat(readEnv(name));
+  return Number.isFinite(v) ? v : fallback;
+}
+function flag(name, fallback = false) {
+  const v = readEnv(name).toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(v)) return true;
+  if (['0', 'false', 'no', 'off'].includes(v)) return false;
+  return fallback;
+}
+
+/** 脱敏，仅用于日志/界面展示。永远不要直接把密钥打进日志。 */
+function redact(value) {
+  const s = String(value == null ? '' : value);
+  if (!s) return '(空)';
+  if (s.length <= 8) return s[0] + '*'.repeat(Math.max(1, s.length - 1));
+  return `${s.slice(0, 4)}${'*'.repeat(Math.min(12, s.length - 6))}${s.slice(-2)}`;
+}
+
+/** 启动审计：只输出"是否已配置"，绝不输出值。 */
+function audit() {
+  const names = Object.keys(SECRETS);
+  if (!names.length) return { registered: 0, configured: [], missing: [] };
+  const configured = [], missing = [];
+  for (const n of names) (hasSecret(n) ? configured : missing).push(n);
+  return { registered: names.length, configured, missing };
+}
+
+module.exports = { IS_NODE, IS_BROWSER: !IS_NODE, SECRETS, secret, hasSecret, option, num, flag, redact, audit };
+
+});
+
 /* ===== lib/source.js ===== */
 __define('source', function (module, exports, require) {
 'use strict';
@@ -225,12 +301,8 @@ __define('source', function (module, exports, require) {
  * 内置 TTL 缓存，避免高频轮询触发限流。
  */
 const IS_NODE = typeof process !== 'undefined' && !!(process.versions && process.versions.node);
+const cfg = require('config');
 
-let nodeHttps = null, nodeZlib = null;
-if (IS_NODE) {
-  try { nodeHttps = require('https'); } catch (_) { nodeHttps = null; }
-  try { nodeZlib = require('zlib'); } catch (_) { nodeZlib = null; }
-}
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
@@ -257,26 +329,9 @@ function request(url, { headers = {}, timeout = 9000 } = {}) {
     );
   }
 
-  // ---- Node：原生 https ----
-  return new Promise((resolve, reject) => {
-    if (!nodeHttps) return reject(new Error('https 模块不可用'));
-    const req = nodeHttps.get(url, { headers: h }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        return resolve(request(res.headers.location, { headers, timeout }));
-      }
-      const chunks = [];
-      res.on('data', (c) => chunks.push(c));
-      res.on('end', () => {
-        let buf = Buffer.concat(chunks);
-        if (res.headers['content-encoding'] === 'gzip' && nodeZlib) { try { buf = nodeZlib.gunzipSync(buf); } catch (_) {} }
-        if (res.statusCode !== 200) return reject(new Error(`HTTP ${res.statusCode} @ ${url.slice(0, 90)}`));
-        resolve(buf);
-      });
-    });
-    req.on('timeout', () => { req.destroy(new Error('timeout')); });
-    req.on('error', reject);
-    req.setTimeout(timeout);
-  });
+  // ---- Node：原生 https（@node-only，不会进入浏览器产物）----
+
+  return Promise.reject(new Error('request(): 当前环境无可用传输层'));
 }
 
 const gbk = (buf) => new TextDecoder('gbk').decode(buf);
@@ -444,20 +499,6 @@ async function getFundFlow(code) {
 
   // 尝试东方财富（精确主力净流入）—— 该接口未开放 CORS，浏览器环境直接走分时估算
   let result = null;
-  if (IS_NODE) try {
-    const url = `https://push2.eastmoney.com/api/qt/stock/fflow/kline/get?secid=${secid}`
-      + `&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65&klt=101&lmt=6`;
-    const buf = await request(url, { timeout: 6000, headers: { Referer: 'https://data.eastmoney.com/' } });
-    const json = JSON.parse(utf8(buf));
-    const kl = json?.data?.klines || [];
-    if (kl.length) {
-      const series = kl.map((s) => {
-        const f = s.split(',');
-        return { date: f[0], main: +f[1], small: +f[2], medium: +f[3], large: +f[4], superLarge: +f[5] };
-      });
-      result = { source: 'eastmoney', today: series[series.length - 1], series };
-    }
-  } catch (_) { /* 降级 */ }
 
   // 兜底：分时量价推算主动买卖（注意：腾讯分时的成交量/成交额为【累计值】，需先差分）
   if (!result) {
@@ -530,37 +571,44 @@ function jsonpSuggest(keyword, timeout = 4000) {
   });
 }
 
+/**
+ * 从 smartbox 原始响应中解出 v_hint 的内层值，再交给 parseSmartbox。
+ * Node 端拿到的是完整文本 `v_hint="sz~002422~..."`；浏览器 JSONP 拿到的已是内层值。
+ */
+function parseSmartboxText(text) {
+  const s = String(text || '');
+  const m = s.match(/v_hint\s*=\s*"([^"]*)"/);
+  return parseSmartbox(m ? m[1] : s);
+}
+
+/**
+ * 腾讯 smartbox 联想搜索（默认路径，无需任何凭据）。
+ * Node 端直接 HTTP 抓取并按 GBK 解码；浏览器端走 JSONP 绕过 CORS。
+ * 两端共用同一个 parseSmartbox，行为一致。
+ */
+async function smartboxSuggest(kw) {
+  const url = `https://smartbox.gtimg.cn/s3/?v=2&t=all&q=${encodeURIComponent(kw)}&_=${Date.now()}`;
+  return jsonpSuggest(kw);
+}
+
 async function searchStocks(keyword) {
   const kw = String(keyword || '').trim();
   if (!kw) return [];
 
-  // 浏览器：优先 JSONP 联想（东方财富接口无 CORS）
-  if (!IS_NODE) {
-    const rows = await jsonpSuggest(kw);
-    if (rows.length) return rows;
-    const n = normalize(kw);
-    return n.market ? [{ code: n.code, name: n.code, market: n.market, secid: n.secid, type: 'A股' }] : [];
-  }
+  // 可选的增强路径：服务端另行配置了东方财富 token 时才启用（字段更全）。
+  // 该分支整体位于 @node-only 区块内，打包成浏览器产物时会被剥离，token 不可能进入静态文件。
 
-  const url = `https://searchapi.eastmoney.com/api/suggest/get?input=${encodeURIComponent(kw)}`
-    + `&type=14&token=REDACTED&count=10`;
-  try {
-    const buf = await cached(`search-${kw}`, 300000, () => request(url, { timeout: 6000 }));
-    const json = JSON.parse(utf8(buf));
-    const rows = json?.QuotationCodeTable?.Data || [];
-    const out = rows
-      .filter((r) => r.Classify === 'AStock' || r.Classify === 'Index' || r.SecurityType === '2')
-      .map((r) => ({ code: r.Code, name: r.Name, market: r.QuoteID?.split('.')[0] === '1' ? 'sh' : 'sz', secid: r.QuoteID, type: r.SecurityTypeName }));
-    if (out.length) return out;
-  } catch (_) { /* 降级到纯代码推断 */ }
+  const rows = await smartboxSuggest(kw);
+  if (rows.length) return rows;
 
+  // 最终兜底：能识别成 6 位代码就直接用
   const n = normalize(kw);
-  return n.market ? [{ code: n.code, name: n.code, market: n.market, secid: n.secid, type: '未知' }] : [];
+  return n.market ? [{ code: n.code, name: n.code, market: n.market, secid: n.secid, type: 'A股' }] : [];
 }
 
 module.exports = {
   request, getQuotes, getQuote, getKline, getMinutes, getFundFlow, searchStocks,
-  normalize, cached, gbk, utf8, parseSmartbox, IS_NODE
+  normalize, cached, gbk, utf8, parseSmartbox, parseSmartboxText, smartboxSuggest, IS_NODE
 };
 
 });
@@ -2128,6 +2176,7 @@ module.exports = { analyze, getProfile, ACTIONS, profilesData };
 });
 
 window.SentryLib = {
+  config: __require('config'),
   source: __require('source'),
   tech: __require('tech'),
   rules: __require('rules'),
