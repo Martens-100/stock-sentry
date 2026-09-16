@@ -3,8 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- 线上未设置 Cache-Control，浏览器会按启发式规则把 HTML 缓存住，
+     导致修好的代码到不了用户手上（最典型的表现：用户报的错，其实早已修复）。
+     这里显式要求每次访问都重新校验。 -->
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
 <title>StockSentry · 智能盯盘与投研生成系统</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=c199844a">
 </head>
 <body>
 
@@ -207,8 +212,8 @@
 
 <div id="toast" class="toast"></div>
 <script>window.__SENTRY_STATIC__ = true;</script>
-<script src="bundle.js"></script>
-<script src="static-api.js"></script>
-<script src="app.js"></script>
+<script src="bundle.js?v=ab79afe8"></script>
+<script src="static-api.js?v=bd7b916c"></script>
+<script src="app.js?v=e3be122d"></script>
 </body>
 </html>

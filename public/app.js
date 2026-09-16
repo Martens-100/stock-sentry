@@ -122,7 +122,7 @@ async function doSearch() {
  * 所以这里的首要目标不是「修」，而是「让失败自己说话」：
  * 失败瞬间就把环境事实、错误原文、传输层自检结果一次性摊开并可一键复制。
  */
-const BUILD_TAG = 'v1.1';
+const BUILD_TAG = 'v1.2';
 
 /** 同步即可取到的环境事实 —— 不需要用户点任何按钮 */
 function envFacts() {
@@ -209,7 +209,13 @@ function showDiag(err, code) {
 
   $('#diagCopy').addEventListener('click', copyDiag);
   $('#diagRun').addEventListener('click', runNetCheck);
-  $('#diagReload').addEventListener('click', () => location.reload());
+  // 不能用 location.reload()：它可能仍从浏览器缓存里拿同一份旧脚本，刷新等于没刷。
+  // 带上一次性查询参数，URL 变了就一定重新取，才能真正绕过缓存。
+  $('#diagReload').addEventListener('click', () => {
+    const u = new URL(location.href);
+    u.searchParams.set('r', String(Date.now()));
+    location.href = u.toString();
+  });
   if (box.scrollIntoView) box.scrollIntoView({ block: 'nearest' });   // 旧引擎可能没实现
   runNetCheck();   // 失败即自动自检，省掉「请你去点一下」的来回
   return true;
@@ -321,7 +327,8 @@ async function selectStock(code) {
     renderDetail(r.data);
   } catch (e) {
     if (state.current !== reqCode) return;            // 已切换，不再弹诊断覆盖新标的
-    toast('分析失败：' + e.message);
+    // 把版本号一起写进提示：远程看一张截图就能判断对方跑的是不是最新代码
+    toast(`分析失败：${e.message} —— 详情见下方诊断面板（${BUILD_TAG}）`);
     showDiag(e, code);                                 // showDiag 负责隐藏 empty/detail，由诊断面板接管
     console.error(e);
   }

@@ -143,8 +143,36 @@ window.SentryLib = {
     throw new Error('docs/index.html 脚本顺序错误，应为 bundle.js → static-api.js → app.js');
   }
 
-  fs.writeFileSync(path.join(OUT, 'index.html'), staticHtml, 'utf8');
   fs.writeFileSync(path.join(OUT, '.nojekyll'), '', 'utf8');
+
+  /* ---------------------------------------------------------------- */
+  /* 资源指纹：给 script/link 的 URL 带上内容哈希                        */
+  /* ---------------------------------------------------------------- */
+  /**
+   * 为什么必须做：线上没有 Cache-Control 头，浏览器按启发式规则缓存，
+   * 于是「页面更新了但用户一直跑旧脚本」成为最难排查的故障 —— 用户看到的
+   * 是早已修好的 bug，开发者却在正确的代码里找问题。
+   * 哈希取内容，所以内容一变 URL 就变，浏览器必然重新下载；
+   * 内容不变则哈希不变，缓存依然有效（也不会破坏构建可复现性）。
+   */
+  const hashOf = (f) => require('crypto').createHash('sha256')
+    .update(fs.readFileSync(path.join(OUT, f))).digest('hex').slice(0, 8);
+  const fingerprints = {};
+  for (const f of ['bundle.js', 'static-api.js', 'app.js', 'style.css']) fingerprints[f] = hashOf(f);
+
+  let versionedHtml = staticHtml.replace(
+    /(src|href)="(bundle|static-api|app)\.js"/g,
+    (m, attr, base) => `${attr}="${base}.js?v=${fingerprints[base + '.js']}"`
+  );
+  versionedHtml = versionedHtml.replace(/href="style\.css"/, `href="style.css?v=${fingerprints['style.css']}"`);
+  fs.writeFileSync(path.join(OUT, 'index.html'), versionedHtml, 'utf8');
+
+  // 指纹必须真的落到页面上，否则这套机制形同虚设
+  for (const [f, h] of Object.entries(fingerprints)) {
+    if (!versionedHtml.includes(`${f}?v=${h}`)) {
+      throw new Error(`docs/index.html 未引用 ${f} 的内容指纹，资源版本化失效`);
+    }
+  }
 
   /* ---------------------------------------------------------------- */
   /* 防泄漏闸门：产物是要公开发布的，必须逐字节扫描，命中即中止构建      */
