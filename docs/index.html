@@ -13,7 +13,7 @@
     <div class="logo">S</div>
     <div>
       <h1>StockSentry</h1>
-      <p>智能盯盘 · 信号反馈 · 投研报告自动生成</p>
+      <p>智能盯盘 · 信号反馈 · 投研报告自动生成 <code class="build-tag" id="buildTag"></code></p>
     </div>
   </div>
   <div class="topbar-right">
@@ -54,6 +54,9 @@
       <h2>选择左侧标的开始盯盘</h2>
       <p>系统将实时计算技术指标、生成利好/利空信号，并给出明确的入场与离场判定。</p>
     </div>
+
+    <!-- 分析失败时接管此处，把原因和环境事实摊开（内容由 app.js 注入） -->
+    <div id="emptyDiag" class="empty-diag" hidden></div>
 
     <div id="detail" hidden>
       <!-- 标的头部 -->

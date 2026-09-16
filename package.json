@@ -7,7 +7,9 @@
     "start": "node server.js",
     "build:static": "node build-static.js",
     "check:secrets": "node scripts/scan-secrets.js",
-    "check": "node scripts/scan-secrets.js && node build-static.js"
+    "check": "node scripts/scan-secrets.js && node build-static.js",
+    "verify:browser": "node scripts/verify-browser-path.js",
+    "verify:ui": "node scripts/verify-ui-dom.js"
   },
   "keywords": [
     "a-share",

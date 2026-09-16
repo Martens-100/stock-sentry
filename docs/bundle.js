@@ -315,23 +315,103 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+/**
+ * 传输层健康状态。诊断面板会读它，用来判断「失败发生在哪一层」。
+ * 之所以需要：静态版没有后端可查日志，只能靠浏览器自述。
+ */
+const transport = { fetchOk: 0, fetchFail: 0, jsonpOk: 0, jsonpFail: 0, lastTransport: '', lastError: '' };
+
 function request(url, { headers = {}, timeout = 9000 } = {}) {
-  const h = { 'User-Agent': UA, 'Accept': '*/*', ...headers };
+  // UA / Referer 在浏览器里属于 forbidden header，会被静默丢弃且毫无作用；
+  // 只在 Node 侧带上，避免给 CORS 请求引入无意义的头。
+  const h = IS_NODE ? { 'User-Agent': UA, 'Accept': '*/*', ...headers } : { 'Accept': '*/*' };
 
   // ---- 浏览器：直接 fetch（腾讯行情接口已开放 access-control-allow-origin: *）----
   if (!IS_NODE) {
     return withTimeout(
       fetch(url, { headers: h, referrerPolicy: 'no-referrer', mode: 'cors' }).then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status} @ ${url.slice(0, 90)}`);
+        transport.fetchOk++; transport.lastTransport = 'fetch';
         return new Uint8Array(await res.arrayBuffer());
       }),
       timeout, `@ ${url.slice(0, 60)}`
-    );
+    ).catch((e) => { transport.fetchFail++; transport.lastError = e.message; throw e; });
   }
 
   // ---- Node：原生 https（@node-only，不会进入浏览器产物）----
 
   return Promise.reject(new Error('request(): 当前环境无可用传输层'));
+}
+
+/* ------------------------------------------------------------------ */
+/* JSONP 兜底传输（仅浏览器）                                          */
+/* ------------------------------------------------------------------ */
+/**
+ * 为什么需要：fetch 会死在很多真实环境里 —— 公司代理/防火墙、隐私与广告拦截
+ * 插件（常整类拦掉第三方域名）、微信等 App 的内置浏览器、以及用 file:// 直接
+ * 打开本地 HTML 的场合。而 <script> 标签既不受 CORS 约束，也基本不会被拦。
+ * 腾讯三个接口都天然支持：q= 会写出全局 v_sz000063，ifzq 加 _var=NAME 包一层。
+ *
+ * 注意：脚本以「响应头声明的字符集」解码（qt 为 GBK、ifzq 为 UTF-8），
+ * 所以走这条路反而绕开了 TextDecoder('gbk') 的浏览器兼容性问题。
+ */
+function jsonp(url, varName, timeout = 9000) {
+  return new Promise((resolve, reject) => {
+    if (typeof document === 'undefined') return reject(new Error('当前环境不支持 JSONP'));
+    const script = document.createElement('script');
+    let settled = false;
+    const finish = (fn, arg) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (script.parentNode) script.parentNode.removeChild(script);
+      try { delete window[varName]; } catch (_) { window[varName] = undefined; }
+      fn(arg);
+    };
+    const timer = setTimeout(() => finish(reject, new Error(`jsonp 超时 @ ${url.slice(0, 70)}`)), timeout);
+    script.onload = () => {
+      const v = window[varName];
+      if (v === undefined) finish(reject, new Error(`jsonp 未返回变量 ${varName}`));
+      else finish(resolve, v);
+    };
+    script.onerror = () => finish(reject, new Error(`jsonp 加载失败 @ ${url.slice(0, 70)}`));
+    script.src = url;
+    script.async = true;
+    document.head.appendChild(script);
+  });
+}
+
+/** 快照文本（v_xxNNNNNN="..."）：fetch 失败时逐只改用 JSONP 取回并还原成同样的文本形态 */
+async function txSnapshotText(txParam, timeout = 9000) {
+  try {
+    return gbk(await request(`https://qt.gtimg.cn/q=${txParam}`, { timeout }));
+  } catch (firstErr) {
+    const list = String(txParam).split(',').map((s) => s.trim()).filter((tx) => /^[a-z]{2}\d{6}$/.test(tx));
+    const parts = await Promise.all(list.map(async (tx) => {
+      const v = await jsonp(`https://qt.gtimg.cn/q=${tx}`, `v_${tx}`, timeout);
+      return v == null ? null : `v_${tx}="${String(v).replace(/"/g, '')}"`;
+    }));
+    const ok = parts.filter(Boolean);
+    if (!ok.length) throw firstErr;
+    transport.jsonpOk++; transport.lastTransport = 'jsonp';
+    return ok.join(';');
+  }
+}
+
+/** ifzq 的 JSON 接口：fetch 失败时加 &_var=NAME 走 JSONP（直接得到对象） */
+async function txJson(url, varName, timeout = 9000) {
+  try {
+    return JSON.parse(utf8(await request(url, { timeout })));
+  } catch (firstErr) {
+    try {
+      const v = await jsonp(`${url}${url.includes('?') ? '&' : '?'}_var=${varName}`, varName, timeout);
+      transport.jsonpOk++; transport.lastTransport = 'jsonp';
+      return typeof v === 'string' ? JSON.parse(v) : v;
+    } catch (e2) {
+      transport.jsonpFail++;
+      throw firstErr;
+    }
+  }
 }
 
 const gbk = (buf) => new TextDecoder('gbk').decode(buf);
@@ -429,8 +509,8 @@ async function getQuotes(codes) {
   const txParam = list.map((c) => c.tx).join(',');
   let rows = [];
   try {
-    const buf = await cached(`tx-snap:${txParam}`, 4000, () => request(`https://qt.gtimg.cn/q=${txParam}`));
-    rows = parseTencentSnapshot(gbk(buf));
+    const text = await cached(`tx-snap:${txParam}`, 4000, () => txSnapshotText(txParam));
+    rows = parseTencentSnapshot(text);
   } catch (e) {
     console.warn('[source] 腾讯快照失败，降级新浪：', e.message);
     const buf = await cached(`sina-snap:${txParam}`, 4000, () =>
@@ -455,8 +535,7 @@ async function getKline(code, period = 'day', count = 260) {
   const { code: c, tx } = normalize(code);
   const p = ['day', 'week', 'month'].includes(period) ? period : 'day';
   const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${tx},${p},,,${count},qfq`;
-  const buf = await cached(`k-${tx}-${p}-${count}`, 60000, () => request(url));
-  const json = JSON.parse(utf8(buf));
+  const json = await cached(`k-${tx}-${p}-${count}`, 60000, () => txJson(url, `k_${tx}_${p}`));
   const node = json?.data?.[tx];
   if (!node) throw new Error(`无K线数据: ${code}`);
   const rows = node[`qfq${p}`] || node[p] || [];
@@ -472,8 +551,7 @@ async function getKline(code, period = 'day', count = 260) {
 async function getMinutes(code) {
   const { tx } = normalize(code);
   const url = `https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=${tx}`;
-  const buf = await cached(`min-${tx}`, 15000, () => request(url));
-  const json = JSON.parse(utf8(buf));
+  const json = await cached(`min-${tx}`, 15000, () => txJson(url, `min_${tx}`));
   const node = json?.data?.[tx];
   const preClose = +(node?.qt?.[tx]?.[4] ?? 0);
   const raw = node?.data?.data || [];
@@ -555,9 +633,11 @@ function jsonpSuggest(keyword, timeout = 4000) {
     if (typeof document === 'undefined') return resolve([]);
     const s = document.createElement('script');
     let done = false;
+    let timer = null;
     const finish = () => {
       if (done) return;
       done = true;
+      clearTimeout(timer);
       const raw = window.v_hint || '';
       try { delete window.v_hint; } catch (_) { window.v_hint = undefined; }
       s.remove();
@@ -567,7 +647,7 @@ function jsonpSuggest(keyword, timeout = 4000) {
     s.onerror = finish;
     s.src = `https://smartbox.gtimg.cn/s3/?v=2&t=all&q=${encodeURIComponent(keyword)}&_=${Date.now()}`;
     document.head.appendChild(s);
-    setTimeout(finish, timeout);
+    timer = setTimeout(finish, timeout);
   });
 }
 
@@ -606,9 +686,20 @@ async function searchStocks(keyword) {
   return n.market ? [{ code: n.code, name: n.code, market: n.market, secid: n.secid, type: 'A股' }] : [];
 }
 
+/** 供诊断面板读取：失败究竟卡在传输层的哪一步 */
+function transportInfo() {
+  const used = transport.jsonpOk > 0 && transport.lastTransport === 'jsonp';
+  return {
+    ...transport,
+    usable: transport.fetchOk > 0 || transport.jsonpOk > 0,
+    mode: used ? 'jsonp（fetch 被拦，已自动切换）' : (transport.fetchOk > 0 ? 'fetch（正常直连）' : '未成功取到任何数据')
+  };
+}
+
 module.exports = {
   request, getQuotes, getQuote, getKline, getMinutes, getFundFlow, searchStocks,
-  normalize, cached, gbk, utf8, parseSmartbox, parseSmartboxText, smartboxSuggest, IS_NODE
+  normalize, cached, gbk, utf8, parseSmartbox, parseSmartboxText, smartboxSuggest, IS_NODE,
+  jsonp, txSnapshotText, txJson, transportInfo
 };
 
 });

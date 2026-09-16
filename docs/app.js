@@ -12,6 +12,8 @@ const fmtMoney = (x) => {
 };
 const cls = (x) => (x > 0 ? 'up' : x < 0 ? 'down' : 'flat');
 const sign = (x, d = 2) => (x == null ? '—' : `${x > 0 ? '+' : ''}${Number(x).toFixed(d)}`);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const state = { codes: [], current: null, data: null, timer: null, tab: 'bull', refreshSec: 8, report: null };
 
@@ -110,12 +112,203 @@ async function doSearch() {
   } catch (e) { box.innerHTML = `<div class="empty-hint">搜索失败：${e.message}</div>`; }
 }
 
+/* ============================ 失败诊断 ============================ */
+/**
+ * 分析失败时给出「可复制」的诊断面板。
+ *
+ * 为什么需要：静态版没有后端，失败只可能发生在浏览器这一侧
+ * （脚本没加载 / 网络被拦 / 浏览器能力缺失 / 接口异常）。
+ * 而原来的 toast 三秒即散，远程协助的人拿不到任何有效信息，只能反复猜。
+ * 所以这里的首要目标不是「修」，而是「让失败自己说话」：
+ * 失败瞬间就把环境事实、错误原文、传输层自检结果一次性摊开并可一键复制。
+ */
+const BUILD_TAG = 'v1.1';
+
+/** 同步即可取到的环境事实 —— 不需要用户点任何按钮 */
+function envFacts() {
+  const scripts = Array.from(document.querySelectorAll('script[src]'))
+    .map((s) => s.getAttribute('src')).join(' · ') || '（无）';
+  return [
+    ['页面版本', esc(BUILD_TAG)],
+    ['运行模式', STATIC_MODE ? '静态版 · 浏览器直连行情（<b>不需要后端，也不需要任何配置</b>）' : '服务端版'],
+    ['bundle.js 运行时', window.SentryLib ? '✅ 已加载' : '❌ <b>未加载</b>（这是关键线索）'],
+    ['static-api.js 接口替身', window.SentryStatic ? '✅ 已注册' : '❌ <b>未注册</b>（这是关键线索）'],
+    ['已加载脚本', esc(scripts)],
+    ['传输层', esc(transportText())],
+    ['页面地址', esc(location.href)],
+    ['UA', esc(navigator.userAgent)]
+  ];
+}
+
+/** 传输层自述：fetch 直连是否可用、有没有已经切到 JSONP 兜底 */
+function transportText() {
+  try {
+    const t = window.SentryLib && window.SentryLib.source && window.SentryLib.source.transportInfo
+      ? window.SentryLib.source.transportInfo() : null;
+    if (!t) return '未知（运行时未加载）';
+    return `${t.mode} · fetch 成功 ${t.fetchOk} 次 / 失败 ${t.fetchFail} 次`
+      + ` · JSONP 成功 ${t.jsonpOk} 次 / 失败 ${t.jsonpFail} 次`
+      + (t.lastError ? ` · 最近错误：${t.lastError}` : '');
+  } catch (_) { return '读取失败'; }
+}
+
+/** 按错误特征给出最可能的原因 —— 写给非技术用户看，直接给结论和下一步 */
+function guessCause(err) {
+  const msg = String((err && err.message) || err || '');
+  if (!window.SentryLib) {
+    return '页面脚本 <code>bundle.js</code> 没有加载成功，浏览器里就没有任何分析能力。常见原因：网络只放行了部分文件、广告拦截/隐私保护类插件拦截、或页面没加载完就被点开。请先按 <b>Ctrl/Cmd + Shift + R</b> 强制刷新整页再试。';
+  }
+  if (STATIC_MODE && !window.SentryStatic) {
+    return '<code>static-api.js</code> 没有注册成功，静态版的接口替身没起来。请强制刷新页面重试。';
+  }
+  if (/Unexpected token|not valid JSON|JSON/i.test(msg)) {
+    return '接口返回的不是 JSON。静态版下这几乎总是意味着请求被静态站点「回退」成了 HTML 页面（bundle.js 未加载或路径被中间层改写），请强制刷新后再试。';
+  }
+  if (/Failed to fetch|NetworkError|Load failed|Network request failed|jsonp|timeout|超时/i.test(msg)) {
+    return '浏览器既连不上行情接口（fetch 直连失败），JSONP 兜底也没成功。这属于<b>网络层问题</b>，不是网站本身的问题：常见于公司代理/防火墙、广告拦截插件、微信等 App 的内置浏览器、或境外网络。建议换 <b>手机流量热点</b>、或换系统自带浏览器（Safari / Chrome）再试一次。';
+  }
+  if (/TextDecoder|gbk|decode|编码/i.test(msg)) {
+    return '当前浏览器不支持 GBK 解码。请改用较新的 Chrome / Edge / Safari，或升级系统后重试。';
+  }
+  if (/HTTP 4\d\d|HTTP 5\d\d/.test(msg)) {
+    return '请求落到了一个并不存在的 HTTP 路径（静态版本来就不需要后端）。通常是 bundle.js 未加载导致请求没被本地接管，请强制刷新后再试。';
+  }
+  return '暂未匹配到已知特征，请把下方「环境事实 + 网络自检」整段复制发给开发者，即可定位。';
+}
+
+function clearDiag() {
+  const box = $('#emptyDiag');
+  if (box) { box.hidden = true; box.innerHTML = ''; }
+}
+
+/** @returns {boolean} 是否成功显示了面板（调用方据此决定要不要隐藏占位区） */
+function showDiag(err, code) {
+  const box = $('#emptyDiag');
+  if (!box) return false;
+  box.hidden = false;
+  box.innerHTML = `<div class="diag">
+    <h3>⚠️ 分析失败 · 诊断面板</h3>
+    <p class="diag-cause">${guessCause(err)}</p>
+    <table class="diag-tb">
+      <tr><td>标的</td><td><code>${esc(code || '—')}</code></td></tr>
+      <tr><td>错误类型</td><td><code>${esc((err && err.name) || 'Error')}</code></td></tr>
+      <tr><td>错误信息</td><td><code>${esc((err && err.message) || String(err))}</code></td></tr>
+      ${envFacts().map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join('')}
+    </table>
+    <div class="diag-actions">
+      <button class="btn primary" id="diagCopy">复制诊断信息</button>
+      <button class="btn ghost" id="diagRun">重新运行网络自检</button>
+      <button class="btn ghost" id="diagReload">强制刷新页面</button>
+    </div>
+    <div id="diagOut" class="diag-out"></div>
+    <p class="diag-note">把上面这段（含自检结果）整段复制发给开发者即可。</p>
+  </div>`;
+
+  $('#diagCopy').addEventListener('click', copyDiag);
+  $('#diagRun').addEventListener('click', runNetCheck);
+  $('#diagReload').addEventListener('click', () => location.reload());
+  if (box.scrollIntoView) box.scrollIntoView({ block: 'nearest' });   // 旧引擎可能没实现
+  runNetCheck();   // 失败即自动自检，省掉「请你去点一下」的来回
+  return true;
+}
+
+/** 浏览器兼容的兜底复制（navigator.clipboard 不可用时走 execCommand） */
+function copyTextFallback(txt) {
+  const ta = document.createElement('textarea');
+  ta.value = txt;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); toast('诊断信息已复制'); } catch (_) { toast('请手动选中文本'); }
+  document.body.removeChild(ta);
+}
+
+function copyDiag() {
+  const box = $('#emptyDiag');
+  const txt = [
+    `【StockSentry 诊断】${BUILD_TAG} ${new Date().toLocaleString()}`,
+    (box ? box.innerText : ''),
+    (($('#diagOut') && $('#diagOut').innerText) || '')
+  ].join('\n').trim();
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(txt)
+      .then(() => toast('诊断信息已复制，发给开发者即可'))
+      .catch(() => copyTextFallback(txt));
+  } else {
+    copyTextFallback(txt);
+  }
+}
+
+/** 逐项探测失败出在哪一层：浏览器能力 → 外网连通 → 接口返回 */
+async function runNetCheck() {
+  const out = $('#diagOut');
+  if (!out) return;
+  out.innerHTML = '<div class="diag-row">检测中…</div>';
+  const lines = [];
+
+  lines.push(['fetch 可用', typeof fetch === 'function' ? '✅ 是' : '❌ 否（浏览器过旧或被禁用）']);
+  let dec = '✅ 支持';
+  try { new TextDecoder('gbk'); } catch (_) { dec = '❌ 不支持（腾讯快照返回 GBK，解码会失败）'; }
+  lines.push(['TextDecoder("gbk")', dec]);
+  lines.push(['localStorage 可用', (() => { try { localStorage.setItem('__t', '1'); localStorage.removeItem('__t'); return '✅ 是'; } catch (_) { return '⚠️ 否（无痕模式？自选股无法保存）'; } })()]);
+  lines.push(['页面协议', location.protocol + (location.protocol === 'file:' ? ' ⚠️ 本地文件打开，fetch 会被浏览器禁止（将依赖 JSONP 兜底）' : '')]);
+
+  const probes = [
+    ['实时快照 qt.gtimg.cn', 'https://qt.gtimg.cn/q=sz000063'],
+    ['日K线 web.ifzq.gtimg.cn', 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=sz000063,day,,,5,qfq'],
+    ['分时 web.ifzq.gtimg.cn', 'https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=sz000063']
+  ];
+  for (const [label, url] of probes) {
+    const t0 = Date.now();
+    try {
+      const res = await fetch(url, { mode: 'cors', referrerPolicy: 'no-referrer', cache: 'no-store' });
+      const buf = await res.arrayBuffer();
+      const warn = (res.status === 200 && buf.byteLength > 0) ? '' : ' ⚠️ 返回为空';
+      lines.push(['fetch · ' + label, `✅ HTTP ${res.status} · ${buf.byteLength} 字节 · ${Date.now() - t0}ms${warn}`]);
+    } catch (e) {
+      lines.push(['fetch · ' + label, `❌ ${e.name}: ${e.message}`]);
+    }
+  }
+
+  // JSONP 兜底通道是否可用（fetch 被拦时这是最后的生命线）
+  for (const [label, url, varName] of [
+    ['JSONP · 快照', 'https://qt.gtimg.cn/q=sz000063', 'v_sz000063'],
+    ['JSONP · 日K', 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=sz000063,day,,,5,qfq&_var=diag_k', 'diag_k']
+  ]) {
+    try {
+      const v = await window.SentryLib.source.jsonp(url, varName, 6000);
+      lines.push([label, v == null ? '❌ 未返回数据' : `✅ 可用（${String(typeof v === 'string' ? v : JSON.stringify(v)).length} 字符）`]);
+    } catch (e) {
+      lines.push([label, `❌ ${e.name}: ${e.message}`]);
+    }
+  }
+
+  out.innerHTML = lines.map(([k, v]) =>
+    `<div class="diag-row"><span>${esc(k)}</span><b class="${/^❌/.test(v) ? 'bad' : ''}">${esc(v)}</b></div>`
+  ).join('');
+}
+
+/* 让任何未捕获的脚本错误也浮出水面（否则在别人的手机上，报错只会消失在控制台里） */
+window.addEventListener('error', (e) => {
+  if (e && e.target && e.target.tagName === 'SCRIPT') {
+    showDiag(new Error('脚本加载失败：' + (e.target.getAttribute('src') || '')), state.current);
+    return;
+  }
+  if (e && (e.error || e.message)) showDiag(e.error || new Error(e.message), state.current);
+}, true);
+window.addEventListener('unhandledrejection', (e) => {
+  const r = e && e.reason;
+  if (r) showDiag(r instanceof Error ? r : new Error(String(r)), state.current);
+});
+
 /* ============================ 详情渲染 ============================ */
 async function selectStock(code) {
   state.current = code;
   $$('.wl-item').forEach((el) => el.classList.toggle('active', el.dataset.code === code));
   $('#empty').hidden = true;
   $('#detail').hidden = false;
+  clearDiag();
   try {
     const r = await api('/api/analyze?code=' + encodeURIComponent(code));
     if (!r.ok) throw new Error(r.error);
@@ -123,8 +316,9 @@ async function selectStock(code) {
     renderDetail(r.data);
   } catch (e) {
     $('#detail').hidden = true;
-    $('#empty').hidden = false;
     toast('分析失败：' + e.message);
+    // 诊断面板自己会说明原因，比干瘪的「选择标的」占位有用得多
+    $('#empty').hidden = showDiag(e, code);
     console.error(e);
   }
 }
@@ -774,6 +968,8 @@ document.addEventListener('visibilitychange', () => {
 
 /* ============================ 启动 ============================ */
 (async function init() {
+  const tag = $('#buildTag');
+  if (tag) tag.textContent = BUILD_TAG;   // 远程排查时用来确认「对方拿到的是不是新版」
   tickClock();
   setInterval(tickClock, 1000);
   await loadWatchlist();
