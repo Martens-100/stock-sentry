@@ -989,6 +989,653 @@ module.exports = { sma, ema, macd, rsi, kdj, boll, atr, computeIndicators, keyLe
 
 });
 
+/* ===== lib/monitors.js ===== */
+__define('monitors', function (module, exports, require) {
+'use strict';
+/**
+ * 监控清单脚手架（monitors）
+ * ================================================================
+ * 统一「专项清单（来自投研文档）」与「通用清单（由实时行情派生）」的字段契约与求值方式。
+ *
+ * 为什么需要这一层：
+ *   1. 此前专项清单与通用清单是两套结构 —— 前者只有 valuationPE 一个求值器能被自动判定，
+ *      其余 auto 键（grossMargin / profitGrowth / ...）声明了却没人实现，于是永远静默不触发；
+ *      后者（通用清单）压根不产出信号，只输出一句 now 文本。
+ *   2. 结果就是"清单里写了该盯什么，但盯出结果来了系统不会有任何反应"。
+ *
+ * 本模块把「清单项」抽象成一个带求值器的声明式结构：
+ *
+ *   { key, dim, metric, window, bull, bear, weight, auto, state, note, evidence }
+ *
+ *   - bull/bear   : 人话口径，直接展示给用户（看什么算好 / 什么算坏）
+ *   - auto        : 求值器键名，指向 EVALUATORS 里的纯函数，用来判定当前处于哪一侧
+ *   - state       : 求值结果 —— bull | bear | neutral | pending | na
+ *   - note        : 当前实测状态（给人看）
+ *   - evidence    : 判定依据（给信号用）
+ *
+ * 「pending」用于"口径已声明、但当前数据源给不出判定"的项（例如需要季报的毛利率），
+ * 显式暴露而不是静默不触发 —— 这是审查阶段发现的主要缺陷。
+ *
+ * 约束：本文件会进浏览器产物，禁止 require Node 模块、禁止读进程环境。
+ */
+
+/* ================================================================== */
+/* 字段契约                                                            */
+/* ================================================================== */
+const FIELDS = ['key', 'dim', 'metric', 'window', 'bull', 'bear', 'weight', 'auto', 'state', 'note', 'evidence'];
+
+/** 清单项状态 */
+const STATES = {
+  bull: { key: 'bull', label: '看多', color: '#c62828', sign: 1 },
+  bear: { key: 'bear', label: '看空', color: '#12855a', sign: -1 },
+  neutral: { key: 'neutral', label: '中性', color: '#b4740a', sign: 0 },
+  pending: { key: 'pending', label: '待复核', color: '#7a828f', sign: 0 },
+  manual: { key: 'manual', label: '人工跟踪', color: '#6b7280', sign: 0 },
+  inapplicable: { key: 'inapplicable', label: '不适用', color: '#7a828f', sign: 0 },
+  na: { key: 'na', label: '数据不足', color: '#7a828f', sign: 0 }
+};
+
+const stateLabel = (s) => (STATES[s] || STATES.na).label;
+const stateColor = (s) => (STATES[s] || STATES.na).color;
+
+/** 是否参与评分：neutral 要参与（用于稀释），其余状态不参与 */
+const isScorable = (s) => s === 'bull' || s === 'bear' || s === 'neutral';
+/** 是否已触发（真正出方向） */
+const isTriggered = (s) => s === 'bull' || s === 'bear';
+
+const n2 = (v) => (v == null || !Number.isFinite(v) ? '—' : Number(v).toFixed(2));
+const p1 = (v) => (v == null || !Number.isFinite(v) ? '—' : Number(v).toFixed(1));
+const pctStr = (v) => (v == null || !Number.isFinite(v) ? '—' : `${v > 0 ? '+' : ''}${Number(v).toFixed(2)}%`);
+
+/* ================================================================== */
+/* 求值器注册表                                                        */
+/* ================================================================== */
+/**
+ * 每个求值器是纯函数 (ctx) -> { state, strength, note, evidence }
+ *   strength: 1..5，用于 scoreSignals 的方向强度（state=neutral 时可省略）
+ * ctx: { ind, quote, flow, profile, minutes }
+ */
+
+const EVALUATORS = {
+  /* ---- 行情可直接判定（通用清单使用） ---- */
+
+  /** 1. 趋势结构：均线排列 + 价格与长均线的相对位置 */
+  trend(ctx) {
+    const { ind } = ctx;
+    const ma = ind.ma || {};
+    const a = ind.maArrangement;
+    const aboveBoth = ma.ma20 != null && ma.ma60 != null && ind.price > ma.ma20 && ind.price > ma.ma60;
+    const belowBoth = ma.ma20 != null && ma.ma60 != null && ind.price < ma.ma20 && ind.price < ma.ma60;
+    const ev = `MA5 ${n2(ma.ma5)} / MA10 ${n2(ma.ma10)} / MA20 ${n2(ma.ma20)} / MA60 ${n2(ma.ma60)}，现价 ${n2(ind.price)}`;
+
+    if (a === 'bull') return { state: 'bull', strength: 4, note: '多头排列', evidence: ev };
+    if (a === 'bear') return { state: 'bear', strength: 4, note: '空头排列', evidence: ev };
+    if (aboveBoth) return { state: 'bull', strength: 2, note: '均线纠缠，但价格站上 MA20 与 MA60', evidence: ev };
+    if (belowBoth) return { state: 'bear', strength: 3, note: '均线纠缠，且价格跌破 MA20 与 MA60', evidence: ev };
+    return { state: 'neutral', strength: 0, note: '均线纠缠，方向未选择', evidence: ev };
+  },
+
+  /** 2. 中期支撑：价格相对 MA20 的偏离度 */
+  ma20Support(ctx) {
+    const { ind } = ctx;
+    const ma20 = ind.ma?.ma20;
+    if (ma20 == null) return { state: 'na', note: 'MA20 不可用', evidence: '' };
+    const dev = ((ind.price - ma20) / ma20) * 100;
+    const ev = `现价 ${n2(ind.price)} / MA20 ${n2(ma20)}，偏离 ${pctStr(dev)}`;
+    if (dev < -2) return { state: 'bear', strength: 4, note: `已跌破 MA20 ${pctStr(dev)}，支撑失守`, evidence: ev };
+    if (dev >= 0 && dev <= 8) return { state: 'bull', strength: 3, note: `站稳 MA20 上方 ${pctStr(dev)}，支撑有效`, evidence: ev };
+    if (dev > 8) return { state: 'neutral', strength: 0, note: `位于 MA20 上方 ${pctStr(dev)}，乖离偏大，回踩确认后赔率更佳`, evidence: ev };
+    return { state: 'neutral', strength: 0, note: `贴近 MA20（${pctStr(dev)}），方向待确认`, evidence: ev };
+  },
+
+  /** 3. MACD 动能：金叉/死叉 + 零轴 + 红绿柱变化 */
+  macd(ctx) {
+    const { ind } = ctx;
+    const m = ind.macd;
+    if (!m || m.dif == null || m.dea == null) return { state: 'na', note: 'MACD 不可用', evidence: '' };
+    const up = m.dif > m.dea;
+    const above = m.dif > 0;
+    const histUp = m.prevHist != null && m.hist != null ? m.hist > m.prevHist : null;
+    const ev = `DIF ${n2(m.dif)} / DEA ${n2(m.dea)}，柱 ${n2(m.hist)}${histUp == null ? '' : histUp ? '（较前值放大）' : '（较前值收敛）'}`;
+
+    if (up && above) return { state: 'bull', strength: histUp ? 4 : 3, note: 'DIF 在 DEA 上方且站上零轴，多头动能', evidence: ev };
+    if (up && !above) return { state: 'bull', strength: 2, note: '零轴下方金叉，属弱多修复', evidence: ev };
+    if (!up && !above) return { state: 'bear', strength: 4, note: 'DIF 在 DEA 下方且位于零轴下，空头动能', evidence: ev };
+    return { state: 'bear', strength: 2, note: '零轴上方死叉，属强势回调', evidence: ev };
+  },
+
+  /** 4. RSI 强弱 */
+  rsi(ctx) {
+    const { ind } = ctx;
+    const r = ind.rsi;
+    if (r == null) return { state: 'na', note: 'RSI 不可用', evidence: '' };
+    const rp = ind.rsiPrev;
+    const ev = `RSI(14) ${n2(r)}${rp == null ? '' : `（前值 ${n2(rp)}）`}`;
+
+    if (rp != null && rp >= 80 && r < rp) return { state: 'bear', strength: 4, note: `自超买区 ${n2(rp)} 掉头至 ${n2(r)}`, evidence: ev };
+    if (r >= 80) return { state: 'bear', strength: 3, note: '超买区（≥80），追高风险大', evidence: ev };
+    if (r <= 30) return { state: 'bear', strength: 4, note: '超卖区（≤30），弱势格局，关注反弹确认', evidence: ev };
+    if (r >= 50) return { state: 'bull', strength: r >= 70 ? 2 : 3, note: r >= 70 ? '强势区（70–80），偏热但仍在多头一侧' : 'RSI 站上 50，多头一侧', evidence: ev };
+    return { state: 'neutral', strength: 0, note: 'RSI 位于 30–50 弱势震荡区，未站上 50', evidence: ev };
+  },
+
+  /** 5. 布林轨道 */
+  boll(ctx) {
+    const { ind } = ctx;
+    const bi = ind.bollInfo;
+    if (!bi || bi.pctB == null) return { state: 'na', note: '布林轨道不可用', evidence: '' };
+    const pb = bi.pctB;
+    const ev = `%B ${(pb * 100).toFixed(0)}%，带宽 ${p1(bi.bandwidthPct)}%（历史分位 ${bi.bandwidthPctile ?? '—'}%），${bi.stateLabel}`;
+    const squeezeNote = bi.state === 'squeeze' ? '；带宽收口，变盘临近' : bi.state === 'expand' ? '；带宽开口，趋势加速' : '';
+
+    if (pb <= 0) return { state: 'bear', strength: 4, note: `跌破布林下轨（%B ${(pb * 100).toFixed(0)}%）${squeezeNote}`, evidence: ev };
+    if (pb >= 1) return { state: 'bull', strength: 2, note: `运行于上轨之上（%B ${(pb * 100).toFixed(0)}%），强势但短期待修复${squeezeNote}`, evidence: ev };
+    if (pb >= 0.5) return { state: 'bull', strength: 3, note: `站上布林中轨（%B ${(pb * 100).toFixed(0)}%）${squeezeNote}`, evidence: ev };
+    return { state: 'bear', strength: 2, note: `位于布林中轨下方（%B ${(pb * 100).toFixed(0)}%）${squeezeNote}`, evidence: ev };
+  },
+
+  /** 6. 回归导轨 */
+  rails(ctx) {
+    const { ind } = ctx;
+    const ra = ind.rails;
+    if (!ra) return { state: 'na', note: '导轨不可用', evidence: '' };
+    if (!ra.reliable) return { state: 'na', note: '导轨宽度过大、有效性不足，本次不计入判定', evidence: `斜率 ${p1(ra.slope20Pct)}%/20日` };
+    const rp = ra.pctChan;
+    const dirLabel = ra.dir === 'up' ? '上升导轨' : ra.dir === 'down' ? '下降导轨' : '水平导轨';
+    const ev = `${dirLabel}｜通道位 ${(rp * 100).toFixed(0)}%｜下轨 ${n2(ra.dn)} / 上轨 ${n2(ra.up)}｜斜率 ${p1(ra.slope20Pct)}%/20日`;
+
+    if (ra.dir === 'up' && rp < 0.45) return { state: 'bull', strength: 4, note: `上升导轨回调至通道下部（${(rp * 100).toFixed(0)}%），低吸区间`, evidence: ev };
+    if (ra.dir === 'up' && rp >= 0.75) return { state: 'neutral', strength: 0, note: `上升导轨上沿（${(rp * 100).toFixed(0)}%），趋势强但赔率下降，宜持有不追`, evidence: ev };
+    if (ra.dir === 'down' && rp <= 0.2) return { state: 'bear', strength: 4, note: `下降导轨下沿（${(rp * 100).toFixed(0)}%），趋势未反转，不宜抄底`, evidence: ev };
+    if (ra.dir === 'down' && rp >= 0.75) return { state: 'bear', strength: 3, note: `反抽至下降导轨上沿（${(rp * 100).toFixed(0)}%），属减仓窗口`, evidence: ev };
+    if (ra.dir === 'flat' && rp <= 0.25) return { state: 'bull', strength: 3, note: `箱体底部（${(rp * 100).toFixed(0)}%），区间低吸位`, evidence: ev };
+    if (ra.dir === 'flat' && rp >= 0.75) return { state: 'bear', strength: 3, note: `箱体顶部（${(rp * 100).toFixed(0)}%），区间减持位`, evidence: ev };
+    return { state: 'neutral', strength: 0, note: `通道中部（${(rp * 100).toFixed(0)}%），方向未选择`, evidence: ev };
+  },
+
+  /** 7. 量价配合 */
+  volume(ctx) {
+    const { ind, quote } = ctx;
+    const vr = quote?.volumeRatio ?? ind.volRatioLocal;
+    if (vr == null) return { state: 'na', note: '量比不可用', evidence: '' };
+    const chg = quote?.changePct ?? ind.returns?.d1;
+    const ev = `量比 ${n2(vr)}${chg == null ? '' : `，当日涨跌 ${pctStr(chg)}`}${quote?.turnover == null ? '' : `，换手 ${quote.turnover}%`}`;
+
+    if (vr >= 1.5 && chg != null && chg > 0) return { state: 'bull', strength: 3, note: '放量上涨，量价配合', evidence: ev };
+    if (vr >= 1.5 && chg != null && chg < 0) return { state: 'bear', strength: 4, note: '放量下跌，抛压释放', evidence: ev };
+    if (vr >= 1.5) return { state: 'neutral', strength: 0, note: '明显放量但方向不明', evidence: ev };
+    if (vr <= 0.7) return { state: 'neutral', strength: 0, note: '明显缩量，观望情绪浓', evidence: ev };
+    return { state: 'neutral', strength: 0, note: '量能正常，无明显方向性含义', evidence: ev };
+  },
+
+  /** 8. 关键区间：唐奇安 20 日通道突破/破位 */
+  donchian(ctx) {
+    const { ind } = ctx;
+    const dc = ind.donchian;
+    if (!dc) return { state: 'na', note: '区间数据不足', evidence: '' };
+    const P = ind.price;
+    const ev = `现价 ${n2(P)}｜20日区间 ${n2(dc.lower)} ~ ${n2(dc.upper)}｜区间位置 ${p1(dc.pct)}%｜52周位置 ${p1(ind.position52)}%`;
+
+    if (P > dc.upper) return { state: 'bull', strength: 4, note: `突破 20 日高点 ${n2(dc.upper)}`, evidence: ev };
+    if (P < dc.lower) return { state: 'bear', strength: 4, note: `跌破 20 日低点 ${n2(dc.lower)}`, evidence: ev };
+    if (dc.pct >= 90) return { state: 'bull', strength: 2, note: `逼近 20 日高点（区间位 ${p1(dc.pct)}%），等待有效突破`, evidence: ev };
+    if (dc.pct <= 10) return { state: 'bear', strength: 2, note: `逼近 20 日低点（区间位 ${p1(dc.pct)}%），注意破位风险`, evidence: ev };
+    return { state: 'neutral', strength: 0, note: `区间内震荡（位置 ${p1(dc.pct)}%）`, evidence: ev };
+  },
+
+  /** 9. 估值分位（专项清单使用，依赖行情 PE） */
+  valuationPE(ctx) {
+    const { ind, quote } = ctx;
+    const pe = quote?.peTtm;
+    if (pe == null) return { state: 'na', note: 'PE(TTM) 不可用', evidence: '' };
+    const ev = `PE(TTM) ${n2(pe)} 倍（数据源：腾讯行情，现价 ${n2(ind.price)}）`;
+    /* 亏损公司的 PE 为负，数值越小越"低"，机械套用「低 PE = 便宜」会得出完全相反的结论。
+       正确做法是判定为不适用，不参与评分。 */
+    if (pe <= 0) {
+      return {
+        state: 'inapplicable',
+        note: `PE(TTM) ${n2(pe)} 倍为负，公司当前处于亏损状态，PE 不适用，需改用 PB 或 PS 判断`,
+        evidence: ev
+      };
+    }
+    if (pe < 30) return { state: 'bull', strength: 3, note: `${n2(pe)} 倍，处于偏低分位`, evidence: ev };
+    if (pe > 50) return { state: 'bear', strength: 3, note: `${n2(pe)} 倍，估值透支风险上升`, evidence: ev };
+    return { state: 'neutral', strength: 0, note: `${n2(pe)} 倍，估值中性`, evidence: ev };
+  }
+};
+
+/**
+ * 口径已声明、但当前数据源给不出判定的求值器键。
+ * 显式登记 → 清单项标记为 pending「待复核」，而不是静默什么都不做。
+ * 需要季报/股东数据，当前只接入实时行情与 K 线。
+ */
+const PENDING_KEYS = {
+  grossMargin: '需要定期报告披露的综合毛利率',
+  segmentShare: '需要定期报告的分业务营收占比',
+  profitGrowth: '需要定期报告的单季归母净利润',
+  revenueGrowth: '需要定期报告的营收与毛利率',
+  chipConcentration: '需要股东户数/融资余额等筹码数据'
+};
+
+const hasEvaluator = (key) => typeof EVALUATORS[key] === 'function';
+
+/* ================================================================== */
+/* 通用清单定义（无研报画像时使用）                                     */
+/* ================================================================== */
+/**
+ * 用实时技术状态生成一套与专项清单等价的盯盘清单。
+ * 回答同样的三个问题：看什么、什么算好、什么算坏。
+ * 每项都带 auto，因此能被 evaluate() 自动判定并产出信号。
+ */
+function buildGeneric(ctx) {
+  const { ind } = ctx;
+  if (!ind) return [];
+
+  const ma = ind.ma || {};
+  const dc = ind.donchian || {};
+  const ra = ind.rails || {};
+  const vr = ctx.quote?.volumeRatio ?? ind.volRatioLocal;
+
+  return [
+    {
+      key: 'trend', auto: 'trend', dim: '趋势结构',
+      metric: `MA20 ${n2(ma.ma20)} / MA60 ${n2(ma.ma60)}`,
+      window: '每日收盘',
+      bull: '价格站上 MA20，且 MA20 走平或上翘',
+      bear: '收盘跌破 MA60，且 MA60 拐头向下',
+      weight: 10
+    },
+    {
+      key: 'ma20s', auto: 'ma20Support', dim: '中期支撑',
+      metric: `MA20 支撑位 ${n2(ma.ma20)}`,
+      window: '每日',
+      bull: `回踩 ${n2(ma.ma20)} 附近不破并收出阳线`,
+      bear: `有效跌破 ${n2(ma.ma20)}（收盘价连续 2 日在下方）`,
+      weight: 9
+    },
+    {
+      key: 'macd', auto: 'macd', dim: 'MACD 动能',
+      metric: `DIF ${n2(ind.macd?.dif)} / DEA ${n2(ind.macd?.dea)}`,
+      window: '每日',
+      bull: 'DIF 上穿 DEA 形成金叉，且 DIF 站上零轴',
+      bear: 'DIF 下穿 DEA 形成死叉，且绿柱持续放大',
+      weight: 8
+    },
+    {
+      key: 'rsi', auto: 'rsi', dim: 'RSI 强弱',
+      metric: `RSI(14) ${n2(ind.rsi)}`,
+      window: '每日',
+      bull: 'RSI 上穿 50 并站稳',
+      bear: 'RSI 跌破 30，或自 80 以上高位掉头',
+      weight: 7
+    },
+    {
+      key: 'boll', auto: 'boll', dim: '布林轨道',
+      metric: `上轨 ${n2(ind.boll?.up)} / 中轨 ${n2(ind.boll?.mid)} / 下轨 ${n2(ind.boll?.dn)}`,
+      window: '每日',
+      bull: '收复中轨，并向中轨上方扩展',
+      bear: '跌破下轨，或上轨遇阻后放量回落',
+      weight: 8
+    },
+    {
+      key: 'rails', auto: 'rails', dim: '回归导轨',
+      metric: `导轨 ${n2(ra.dn)} ~ ${n2(ra.up)}（${ra.bars || '—'} 根，k=${ra.k ?? '—'}）`,
+      window: '每日',
+      bull: '上升导轨中回踩下沿获支撑',
+      bear: '下降导轨中跌破下轨，趋势延续',
+      weight: 8
+    },
+    {
+      key: 'volume', auto: 'volume', dim: '量价配合',
+      metric: `量比 ${vr == null ? '—' : n2(vr)} / 换手 ${ctx.quote?.turnover == null ? '—' : ctx.quote.turnover + '%'}`,
+      window: '每日',
+      bull: '放量突破关键阻力位（量比 > 1.5）',
+      bear: '放量下跌或缩量反弹无力',
+      weight: 7
+    },
+    {
+      key: 'donchian', auto: 'donchian', dim: '关键区间',
+      metric: dc.upper == null ? '20日区间数据不足' : `20日 ${n2(dc.lower)} ~ ${n2(dc.upper)}`,
+      window: '每日',
+      bull: '突破 20 日高点并有效站稳',
+      bear: '跌破 20 日低点',
+      weight: 7
+    }
+  ];
+}
+
+/* ================================================================== */
+/* 求值主流程                                                          */
+/* ================================================================== */
+/**
+ * 对清单逐项求值，返回带状态的清单行 + 可参与评分的信号。
+ *
+ * @param {Array}  monitors 清单项（通用或专项）
+ * @param {Object} ctx      分析上下文 { ind, quote, flow, profile, minutes }
+ * @param {Object} [opt]
+ *   @param {string} [opt.origin='monitor'] 产出信号的 origin，专项清单应传 'profile'
+ * @returns {{ rows: Array, signals: Array, triggered: number, pending: number }}
+ */
+function evaluate(monitors, ctx, opt = {}) {
+  const origin = opt.origin || 'monitor';
+  const rows = [];
+  const signals = [];
+  let triggered = 0;
+  let pending = 0;
+  let manual = 0;
+
+  for (const m of monitors || []) {
+    const key = m.key || m.auto || null;
+    /* 求值器只认 auto —— 专项清单的 key 只是标识符，
+       不能因为恰好同名就被行情求值器接管 */
+    const autoKey = m.auto || null;
+
+    let r = null;
+    let unresolved = null;
+
+    if (hasEvaluator(autoKey)) {
+      try {
+        r = EVALUATORS[autoKey](ctx);
+      } catch (e) {
+        r = { state: 'na', note: `求值异常：${e && e.message ? e.message : '未知错误'}`, evidence: '' };
+      }
+    } else if (autoKey && PENDING_KEYS[autoKey]) {
+      unresolved = PENDING_KEYS[autoKey];
+    } else if (autoKey) {
+      unresolved = `未登记的求值器 ${autoKey}`;
+    }
+
+    /* pending = 口径已声明但缺数据源；manual = 压根没有自动判定口径，需人工跟踪 */
+    const state = r ? (r.state || 'na') : autoKey ? 'pending' : 'manual';
+    const note = r ? (r.note || '—')
+      : autoKey ? `口径已声明，暂缺数据源：${unresolved}`
+        : '需人工跟踪：该口径无法由行情数据自动判定';
+    const evidence = r ? (r.evidence || '') : '';
+
+    rows.push({ ...m, key, state, note, evidence, triggered: isTriggered(state) });
+
+    if (!isScorable(state)) {
+      if (state === 'pending') pending += 1;
+      if (state === 'manual') manual += 1;
+      continue;
+    }
+
+    const side = state === 'bull' ? 'bull' : state === 'bear' ? 'bear' : 'neutral';
+    const strength = side === 'neutral' ? 0 : Math.max(1, Math.min(5, r.strength ?? 3));
+    if (side !== 'neutral') triggered += 1;
+
+    signals.push({
+      id: `mon-${key}`,
+      dim: m.dim || '监控清单',
+      name: m.metric || m.dim || key,
+      side,
+      strength,
+      weight: m.weight ?? 5,
+      text: side === 'bull' ? m.bull : side === 'bear' ? m.bear : `未触发：${m.bull} / ${m.bear}`,
+      evidence: evidence || note,
+      origin
+    });
+  }
+
+  return { rows, signals, triggered, pending, manual };
+}
+
+/**
+ * 清单概览：给 UI/报告用的一句话结论。
+ * 评价只在"可判定项"(total) 上做，同时把 pending / manual / inapplicable 如实暴露，
+ * 避免用"多数项未触发"掩盖"其实大部分项压根没法自动判定"。
+ */
+function summarize(rows) {
+  const list = rows || [];
+  const cnt = (s) => list.filter((r) => r.state === s).length;
+  const bull = cnt('bull'), bear = cnt('bear'), neutral = cnt('neutral');
+  const pending = cnt('pending'), manual = cnt('manual');
+  const inapplicable = cnt('inapplicable'), na = cnt('na');
+  const total = bull + bear + neutral;
+
+  let verdict = '无可自动判定项，清单需人工跟踪';
+  if (total) {
+    if (bull >= bear + 2) verdict = `看多项占优（${bull} 看多 / ${bear} 看空）`;
+    else if (bear >= bull + 2) verdict = `看空项占优（${bull} 看多 / ${bear} 看空）`;
+    else verdict = `多空交织（${bull} 看多 / ${bear} 看空 / ${neutral} 中性）`;
+  }
+
+  const gaps = [];
+  if (pending) gaps.push(`${pending} 项待复核（缺数据源）`);
+  if (manual) gaps.push(`${manual} 项需人工跟踪`);
+  if (inapplicable) gaps.push(`${inapplicable} 项不适用`);
+  if (na) gaps.push(`${na} 项数据不足`);
+
+  return {
+    bull, bear, neutral, pending, manual, inapplicable, na, total,
+    judgeable: total, listed: list.length,
+    verdict,
+    gapNote: gaps.length ? `另有 ${gaps.join('、')}，未计入评分。` : ''
+  };
+}
+
+module.exports = {
+  FIELDS, STATES, stateLabel, stateColor, isScorable, isTriggered,
+  EVALUATORS, PENDING_KEYS, hasEvaluator,
+  buildGeneric, evaluate, summarize,
+  n2
+};
+
+});
+
+/* ===== lib/portrait.js ===== */
+__define('portrait', function (module, exports, require) {
+'use strict';
+/**
+ * 画像合成（portrait）
+ * ================================================================
+ * 两件事：
+ *
+ * 1. deriveLevels(ind) —— 从实时指标推导一套完整的交易价位（建仓区间 / 止损 / 硬止损 /
+ *    两级目标位 / 支撑阻力）。这是引擎与画像共用的唯一推导来源，避免同一套
+ *    ATR + 关键位逻辑在 buildPlan 和画像里各写一遍。
+ *
+ * 2. synthesizeProfile(ctx) —— 为**任意查询标的**生成一份"自动画像"，
+ *    使没有导入投研报告的股票也有完整的画像卡片与监控清单。
+ *
+ * ⚠️ 诚信边界（重要，不可弱化）
+ *    自动画像不是投研报告。它只基于实时行情与 K 线推导，不含基本面判断、
+ *    不含机构观点、不含公司调研结论。因此：
+ *      · profileQuality 固定为 'auto'，UI 必须显著标注来源；
+ *      · 不伪造 valuation.fairPe 这类"合理估值区间"（没有研报依据就不该有）；
+ *      · 不设置 cost（没有持仓就不该有浮盈浮亏）；
+ *      · 不冒充专属清单口径 —— 它的清单就是通用技术清单。
+ *
+ * 约束：本文件会进浏览器产物，禁止 require Node 模块、禁止读进程环境。
+ */
+const monitors = require('monitors');
+
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const r2 = (x) => (Number.isFinite(x) ? +x.toFixed(2) : null);
+const n2 = monitors.n2;
+
+const AUTO_QUALITY = 'auto';
+const AUTO_SOURCE = '由实时行情自动生成（非投研报告）';
+
+/* ================================================================== */
+/* 1. 价位推导（引擎与画像共用）                                        */
+/* ================================================================== */
+/**
+ * 从 ATR 与关键位推导交易价位。
+ * 与历史上 buildPlan 的兜底口径保持一致：建仓区间取现价下方 1.5~0.5 ATR，
+ * 止损 2.5 ATR，硬止损 3.5 ATR，目标位优先取真实阻力，其次按 ATR 外推。
+ */
+function deriveLevels(ind) {
+  const P = ind.price;
+  const atr = ind.atr || P * 0.02;
+
+  /* --- 支撑 / 阻力：优先用 K 线关键位，不足 2 个时用均线补齐 --- */
+  const supports = (ind.keyLevels || []).filter((k) => k.side === 'support')
+    .sort((a, b) => b.price - a.price).slice(0, 5);
+  const resistances = (ind.keyLevels || []).filter((k) => k.side === 'resistance')
+    .sort((a, b) => a.price - b.price).slice(0, 5);
+
+  const maRef = [
+    { name: 'MA5', v: ind.ma?.ma5 }, { name: 'MA10', v: ind.ma?.ma10 }, { name: 'MA20', v: ind.ma?.ma20 },
+    { name: 'MA30', v: ind.ma?.ma30 }, { name: 'MA60', v: ind.ma?.ma60 }, { name: 'MA120', v: ind.ma?.ma120 },
+    { name: 'MA250', v: ind.ma?.ma250 }
+  ].filter((x) => x.v != null);
+
+  if (supports.length < 2) {
+    maRef.filter((x) => x.v < P).sort((a, b) => b.v - a.v).slice(0, 3).forEach((x) =>
+      supports.push({ price: x.v, count: 0, side: 'support', dist: +(((x.v - P) / P) * 100).toFixed(2), label: x.name }));
+  }
+  if (resistances.length < 2) {
+    maRef.filter((x) => x.v > P).sort((a, b) => a.v - b.v).slice(0, 3).forEach((x) =>
+      resistances.push({ price: x.v, count: 0, side: 'resistance', dist: +(((x.v - P) / P) * 100).toFixed(2), label: x.name }));
+  }
+  resistances.sort((a, b) => a.price - b.price);
+  supports.sort((a, b) => b.price - a.price);
+
+  /* --- 价位 --- */
+  const entryLo = r2(P - atr * 1.5);
+  const entryHi = r2(P - atr * 0.5);
+  const stopLoss = r2(P - atr * 2.5);
+  const hardStop = r2(P - atr * 3.5);
+
+  // 目标位与现价保持 ≥1.2×ATR 距离，避免"贴脸"目标导致盈亏比失真
+  const minTgtDist = atr * 1.2;
+  const farRes = resistances.filter((r) => r.price >= P + minTgtDist);
+  const target1 = farRes[0]?.price ?? r2(P + atr * 4);
+  let target2 = farRes.filter((r) => r.price > target1)[0]?.price ?? r2(P + atr * 7);
+  if (target2 == null || target2 <= target1) target2 = r2(target1 + atr * 3);
+
+  return {
+    entry: [entryLo, entryHi],
+    stopLoss, hardStop, target1, target2,
+    positionLimit: 0.1,
+    atr: r2(atr),
+    supports, resistances
+  };
+}
+
+/* ================================================================== */
+/* 2. 自动画像合成                                                     */
+/* ================================================================== */
+const MARKET_LABEL = { sh: '沪市', sz: '深市' };
+
+/** 由当前技术状态生成画像标签 */
+function buildTags(ind) {
+  const tags = ['自动画像'];
+  const code = ind && ind.price;
+  if (code != null) {
+    const a = ind.maArrangement;
+    if (a === 'bull') tags.push('多头排列');
+    else if (a === 'bear') tags.push('空头排列');
+    else tags.push('均线纠缠');
+  }
+  const r = ind?.rsi;
+  if (r != null) {
+    if (r >= 80) tags.push('超买');
+    else if (r <= 30) tags.push('超卖');
+    else if (r >= 50) tags.push('偏强');
+    else tags.push('偏弱');
+  }
+  const dir = ind?.rails?.dir;
+  if (ind?.rails?.reliable && dir) tags.push(dir === 'up' ? '上升导轨' : dir === 'down' ? '下降导轨' : '箱体震荡');
+  const cell = MARKET_LABEL[ind?.market] || null;
+  if (cell) tags.push(cell);
+  return tags.slice(0, 5);
+}
+
+/** 由当前技术状态生成投资逻辑摘要（不编造基本面） */
+function buildThesis(name, code, ind, quote) {
+  const P = n2(ind.price);
+  const ma = ind.ma || {};
+  const m = ind.macd || {};
+  const arr = ind.maArrangement === 'bull' ? '均线多头排列'
+    : ind.maArrangement === 'bear' ? '均线空头排列' : '均线纠缠、方向未选择';
+  const parts = [
+    `${name}（${code}）现价 ${P} 元，${arr}；MA20 ${n2(ma.ma20)}、MA60 ${n2(ma.ma60)}。`,
+    `MACD DIF ${n2(m.dif)} / DEA ${n2(m.dea)}，RSI(14) ${n2(ind.rsi)}，`
+    + `20 日区间 ${n2(ind.donchian?.lower)}~${n2(ind.donchian?.upper)}，52 周位置 ${ind.position52 ?? '—'}%。`
+  ];
+  if (quote?.peTtm != null) parts.push(`当前 PE(TTM) ${n2(quote.peTtm)} 倍。`);
+  if (ind.channelVerdict?.advice) parts.push(ind.channelVerdict.advice);
+  parts.push('本画像由实时行情自动生成，不含基本面与研报结论，仅用于技术面盯盘。');
+  return parts.join('');
+}
+
+/** 由当前技术状态生成风险清单（每条都能对上一个真实指标，不写空话） */
+function buildRisks(ind) {
+  const out = [];
+  const P = ind.price;
+  if (ind.maArrangement === 'bear') out.push('均线空头排列，趋势性下行压力尚未解除，抄底需等待右侧信号。');
+  if (ind.rsi != null && ind.rsi >= 80) out.push(`RSI(14) 已达 ${n2(ind.rsi)}，短线超买，存在技术性回调压力。`);
+  if (ind.rsi != null && ind.rsi <= 30) out.push(`RSI(14) 降至 ${n2(ind.rsi)}，弱势格局，超卖不等于见底。`);
+  if (ind.bollInfo && ind.bollInfo.pctB <= 0) out.push('价格已跌破布林下轨，弱势延续风险偏高。');
+  if (ind.rails && ind.rails.reliable && ind.rails.dir === 'down') out.push('处于下降导轨，趋势未反转前反弹属减仓窗口而非买点。');
+  if (ind.drawdownFromHigh != null && ind.drawdownFromHigh <= -20) {
+    out.push(`距 52 周高点回撤 ${n2(Math.abs(ind.drawdownFromHigh))}%，上方套牢盘构成压力。`);
+  }
+  if (ind.atrPct != null && ind.atrPct >= 4) out.push(`日均波动率 ATR 达 ${ind.atrPct}%，波动偏大，须按 ATR 设置动态止损。`);
+  if (ind.rsi != null && ind.rsi >= 70 && ind.rsi < 80) out.push('RSI 位于 70–80 偏热区，追高的赔率不佳。');
+  out.push('⚠️ 自动画像不含投研结论与机构观点，关键决策请自行核实并独立判断。');
+  return out.slice(0, 6);
+}
+
+/**
+ * 为任意标的生成自动画像。
+ * @param {Object} ctx  { ind, quote, flow, minutes, market, code, name }
+ */
+function synthesizeProfile(ctx) {
+  const { ind, quote } = ctx;
+  if (!ind) return null;
+
+  const code = ctx.code || quote?.code || ind.code || '—';
+  const name = ctx.name || quote?.name || code;
+  const levels = deriveLevels(ind);
+  const rows = monitors.buildGeneric(ctx);
+
+  return {
+    code,
+    market: ctx.market || quote?.market || null,
+    name,
+    tags: buildTags({ ...ind, market: ctx.market || quote?.market }),
+    sourceDoc: AUTO_SOURCE,
+    reportDate: null,
+    thesis: buildThesis(name, code, ind, quote),
+
+    // 无研报依据 → 不编造护城河与合理估值区间
+    moat: null,
+    valuation: quote?.peTtm != null || quote?.pb != null
+      ? { benchmark: '腾讯行情实时快照', note: '自动画像不提供"合理估值区间"判断，请结合行业自行核对' }
+      : null,
+
+    levels,
+    cost: null,            // 无持仓，不得伪造成本
+    takeProfit: [],
+    catalysts: [],
+    businessMix: [],
+    monitors: rows,        // 清单即通用技术清单
+    fundamentals: {
+      peTtm: quote?.peTtm ?? null, pb: quote?.pb ?? null,
+      totalCap: quote?.totalCap ?? null, floatCap: quote?.floatCap ?? null,
+      turnover: quote?.turnover ?? null, volumeRatio: quote?.volumeRatio ?? null,
+      position52: ind.position52 ?? null, drawdownFromHigh: ind.drawdownFromHigh ?? null,
+      atrPct: ind.atrPct ?? null,
+      source: '实时行情自动汇总'
+    },
+    chips: null,
+    risks: buildRisks(ind),
+    verdictNote: null,
+
+    /* ---- 诚信标记 ---- */
+    auto: true,
+    profileQuality: AUTO_QUALITY,
+    disclaimer: AUTO_SOURCE
+  };
+}
+
+module.exports = { deriveLevels, synthesizeProfile, AUTO_QUALITY, AUTO_SOURCE, clamp };
+
+});
+
 /* ===== lib/rules.js ===== */
 __define('rules', function (module, exports, require) {
 'use strict';
@@ -998,7 +1645,11 @@ __define('rules', function (module, exports, require) {
  *  A. 通用技术规则 —— 适用于任意标的，由实时行情 + K线推导
  *  B. 个股画像规则 —— 从投研文档提取的关键价位/估值/监控清单
  * 每条信号输出：方向 / 强度 / 权重 / 结论文本 / 数据依据
+ *
+ * 注：监控清单的求值已收敛到 lib/monitors.js 的统一脚手架，
+ *    本文件只保留「技术规则 / 通道规则 / 画像价位规则」。
  */
+const monitors = require('monitors');
 
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const pct = (x) => (x == null ? '—' : `${x > 0 ? '+' : ''}${x}%`);
@@ -1314,7 +1965,10 @@ function profileRules(ctx) {
   if (!profile) return s;
   const push = (o) => s.push({ ...o, origin: 'profile' });
   const P = ind.price;
-  const L = profile.levels || {};
+  /* 自动画像的价位是由现价反推出来的，不是研报给的。
+     若让它们参与画像价位规则，止损/目标位会与现价"贴脸"，
+     凭空产生「逼近止损位」「接近目标位」这类假信号 —— 因此整体跳过。 */
+  const L = profile.auto ? {} : (profile.levels || {});
 
   /* --- 关键价位判定 --- */
   if (L.entry && L.entry.length === 2) {
@@ -1385,20 +2039,9 @@ function profileRules(ctx) {
       evidence: `PE(TTM) ${pe} 倍｜合理区间 ${lo}-${hi} 倍｜对比：${V.benchmark || "—"}（数据源：腾讯行情）` });
   }
 
-  /* --- 监控清单中的可自动判定项 --- */
-  for (const m of (profile.monitors || [])) {
-    if (!m.auto) continue;
-    if (m.auto === 'valuationPE' && quote?.peTtm != null) {
-      const pe = quote.peTtm;
-      const bull = /35倍以下|行业均值下方/.test(m.bull) ? pe < 35 : pe < 30;
-      const bear = /50倍|显著高于/.test(m.bear) ? pe > 50 : pe > 60;
-      if (bull || bear) {
-        push({ id: `mon-${m.dim}`, dim: m.dim, name: `${m.metric}${bull ? '达标' : '恶化'}`,
-          side: bull ? 'bull' : 'bear', strength: 3, weight: m.weight,
-          text: bull ? m.bull : m.bear, evidence: `PE(TTM) ${pe}（观察窗口：${m.window}）` });
-      }
-    }
-  }
+  /* --- 监控清单的可自动判定项 ---
+     已迁移到 lib/monitors.js 的 evaluate()：专项清单与通用清单走同一套求值器，
+     并显式区分「已实现」与「口径已声明但缺数据源（pending）」两种情况。 */
 
   return s;
 }
@@ -1409,123 +2052,16 @@ function profileRules(ctx) {
 /**
  * 没有专项研报画像时，用实时技术状态生成一套等价的盯盘清单。
  *
- * 为什么需要：画像清单来自投研文档，只有少数标的才有。此前的实现在无画像时
- * 会把整张监控清单卡片隐藏掉，导致"盯了别的股票却看不到任何监控项"。
- * 这里给出通用模板 —— 回答同样的三个问题：看什么、什么算好、什么算坏。
+ * 定义与求值已收敛到 lib/monitors.js 的脚手架：
+ *   · buildGeneric(ctx) 给出「看什么 / 什么算好 / 什么算坏」的口径；
+ *   · EVALUATORS        给出每一项的自动判定，把清单从"只展示"变成"可触发信号"；
+ *   · PENDING_KEYS      显式登记"口径已声明、但当前数据源给不出判定"的项，
+ *                       标记为 pending 待复核，而不是静默永不触发。
  *
- * 注意：生成的是"观察清单"（该盯哪些位、什么条件触发），不重复产出信号；
- * 各项是否触发由既有的技术规则负责判定。
+ * 这里保留一个薄封装，兼容既有调用方。
  */
 function genericMonitors(ctx) {
-  const { ind, quote } = ctx;
-  if (!ind) return [];
-
-  const n2 = (v) => (v == null || !Number.isFinite(v) ? '—' : Number(v).toFixed(2));
-  const ma = ind.ma || {};
-  const kdj = ind.kdj || {};
-  const rows = [];
-  const push = (m) => rows.push(m);
-
-  /* 1. 趋势结构 */
-  push({
-    dim: '趋势结构',
-    metric: `MA20 ${n2(ma.ma20)} / MA60 ${n2(ma.ma60)}`,
-    window: '每日收盘',
-    bull: '价格站上 MA20，且 MA20 走平或上翘',
-    bear: '收盘跌破 MA60，且 MA60 拐头向下',
-    weight: 10,
-    now: ind.maArrangement === 'bull' ? '多头排列'
-      : ind.maArrangement === 'bear' ? '空头排列'
-        : ind.price > ma.ma20 ? '价格在 MA20 上方，均线纠缠' : '价格在 MA20 下方，均线纠缠'
-  });
-
-  /* 2. 中期支撑 */
-  push({
-    dim: '中期支撑',
-    metric: `MA20 支撑位 ${n2(ma.ma20)}`,
-    window: '每日',
-    bull: `回踩 ${n2(ma.ma20)} 附近不破并收出阳线`,
-    bear: `有效跌破 ${n2(ma.ma20)}（收盘价连续 2 日在下方）`,
-    weight: 9,
-    now: `现价 ${n2(ind.price)}，偏离 MA20 ${ma.ma20 ? (((ind.price - ma.ma20) / ma.ma20) * 100).toFixed(2) : '—'}%`
-  });
-
-  /* 3. MACD 动能 */
-  push({
-    dim: 'MACD 动能',
-    metric: `DIF ${n2(ind.macd?.dif)} / DEA ${n2(ind.macd?.dea)}`,
-    window: '每日',
-    bull: 'DIF 上穿 DEA 形成金叉，且 DIF 站上零轴',
-    bear: 'DIF 下穿 DEA 形成死叉，且绿柱持续放大',
-    weight: 8,
-    now: ind.macd ? `${ind.macd.dif >= ind.macd.dea ? 'DIF 在 DEA 上方' : 'DIF 在 DEA 下方'}，红绿柱 ${n2(ind.macd.hist)}` : '—'
-  });
-
-  /* 4. RSI 强弱 */
-  push({
-    dim: 'RSI 强弱',
-    metric: `RSI(14) ${n2(ind.rsi)}`,
-    window: '每日',
-    bull: 'RSI 上穿 50 并站稳',
-    bear: 'RSI 跌破 30，或自 80 以上高位掉头',
-    weight: 7,
-    now: ind.rsi == null ? '—'
-      : ind.rsi >= 80 ? '超买区，警惕回落'
-        : ind.rsi <= 30 ? '超卖区，存在反弹需求'
-          : ind.rsi >= 50 ? '中性偏强' : '中性偏弱'
-  });
-
-  /* 5. 布林轨道 */
-  push({
-    dim: '布林轨道',
-    metric: `上轨 ${n2(ind.boll?.up)} / 中轨 ${n2(ind.boll?.mid)} / 下轨 ${n2(ind.boll?.dn)}`,
-    window: '每日',
-    bull: '收复中轨，并向中轨上方扩展',
-    bear: '跌破下轨，或上轨遇阻后放量回落',
-    weight: 8,
-    now: ind.bollInfo
-      ? `%B ${(ind.bollInfo.pctB * 100).toFixed(0)}%，带宽 ${ind.bollInfo.bandwidthPct}%（历史分位 ${ind.bollInfo.bandwidthPctile}%）${ind.bollInfo.stateLabel}`
-      : '—'
-  });
-
-  /* 6. 回归导轨 */
-  push({
-    dim: '回归导轨',
-    metric: `导轨 ${n2(ind.rails?.dn)} ~ ${n2(ind.rails?.up)}（${ind.rails?.bars || '—'} 根，k=${ind.rails?.k ?? '—'}）`,
-    window: '每日',
-    bull: '上升导轨中回踩下沿获支撑',
-    bear: '下降导轨中跌破下轨，趋势延续',
-    weight: 8,
-    now: ind.rails
-      ? `${ind.rails.dir === 'up' ? '上升导轨' : ind.rails.dir === 'down' ? '下降导轨' : '水平导轨'}｜斜率 ${ind.rails.slope20Pct}%/20日｜通道位置 ${(ind.rails.pctChan * 100).toFixed(0)}%`
-      : '—'
-  });
-
-  /* 7. 量价配合 */
-  push({
-    dim: '量价配合',
-    metric: `量比 ${quote?.volumeRatio == null ? '—' : quote.volumeRatio} / 换手 ${quote?.turnover == null ? '—' : quote.turnover + '%'}`,
-    window: '每日',
-    bull: '放量突破关键阻力位（量比 > 1.5）',
-    bear: '放量下跌或缩量反弹无力',
-    weight: 7,
-    now: quote?.volumeRatio == null ? '—'
-      : quote.volumeRatio >= 1.5 ? '明显放量'
-        : quote.volumeRatio <= 0.7 ? '明显缩量' : '量能正常'
-  });
-
-  /* 8. 关键区间 */
-  push({
-    dim: '关键区间',
-    metric: `20日 ${n2(ind.donchian?.lower)} ~ ${n2(ind.donchian?.upper)}`,
-    window: '每日',
-    bull: '突破 20 日高点并有效站稳',
-    bear: '跌破 20 日低点',
-    weight: 7,
-    now: `区间位置 ${ind.donchian?.pct ?? '—'}%｜52周位置 ${ind.position52 ?? '—'}%`
-  });
-
-  return rows;
+  return monitors.buildGeneric(ctx);
 }
 
 /* ================================================================== */
@@ -1574,18 +2110,28 @@ function signalTable(signals) {
   return ['| 方向 | 维度 | 信号 | 判读 | 数据依据 |', '| --- | --- | --- | --- | --- |', ...rows].join('\n');
 }
 
-function monitorTable(monitors, source) {
+/** 清单项的判定状态 → 报告里的文字 */
+const MON_STATE_TEXT = {
+  bull: '🔴 看多', bear: '🟢 看空', neutral: '⚪ 中性',
+  pending: '⏸ 待复核', manual: '✎ 人工跟踪',
+  inapplicable: '— 不适用', na: '— 数据不足'
+};
+
+function monitorTable(monitors, source, summary) {
   if (!monitors?.length) return '_暂无可用的监控项（行情数据不足）。_';
-  const generic = source === 'generic';
-  const rows = monitors.map((m) => (generic
-    ? `| ${m.dim} | ${m.metric} | ${m.window} | 🔴 ${m.bull} | 🟢 ${m.bear} | ${m.now || '—'} | ${m.weight} |`
-    : `| ${m.dim} | ${m.metric} | ${m.window} | 🔴 ${m.bull} | 🟢 ${m.bear} | ${m.weight} |`));
-  const head = generic
-    ? ['| 跟踪维度 | 关键指标 | 观察窗口 | 利好信号 | 利空信号 | 当前状态 | 权重 |',
-      '| --- | --- | --- | --- | --- | --- | --- |']
-    : ['| 跟踪维度 | 关键指标 | 观察窗口 | 利好信号 | 利空信号 | 权重 |',
-      '| --- | --- | --- | --- | --- | --- |'];
-  return [...head, ...rows].join('\n');
+  const srcNote = source === 'profile'
+    ? '清单来源：**专项清单**（来自投研文档）'
+    : '清单来源：**自动清单**（由实时行情派生，非投研结论）';
+  const head = ['| 跟踪维度 | 关键指标 | 观察窗口 | 利好信号 | 利空信号 | 判定 | 当前状态 | 权重 |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- |'];
+  const rows = monitors.map((m) =>
+    `| ${m.dim} | ${m.metric} | ${m.window} | 🔴 ${m.bull} | 🟢 ${m.bear} `
+    + `| ${MON_STATE_TEXT[m.state] || '—'} | ${m.note || '—'} | ${m.weight} |`);
+  const out = [`> ${srcNote}`, '', ...head, ...rows].join('\n');
+  if (!summary) return out;
+  const tail = `**清单概览：** ${summary.verdict}（可判定 ${summary.judgeable} / 列出 ${summary.listed} 项）`
+    + (summary.gapNote ? `\n\n> ${summary.gapNote}` : '');
+  return `${out}\n\n${tail}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1599,7 +2145,11 @@ function buildReport(a) {
   L.push(`# ${a.name}（${a.code}）投研报告与持仓攻略`);
   L.push('');
   L.push(`> **报告日期：** ${dateStr}　**标的：** ${a.name}（${a.code}${a.market === 'sh' ? '.SH' : a.market === 'sz' ? '.SZ' : '.BJ'}）　**最新价：** ${f2(q.price)} 元　**总市值：** ${q.totalCap ? q.totalCap.toFixed(0) + '亿元' : '—'}`);
-  if (hasProfile) L.push(`> **画像来源：** ${pf.sourceDoc}${pf.reportDate ? `（原报告日期 ${pf.reportDate}）` : ''}`);
+  if (hasProfile) {
+    L.push(pf.auto
+      ? '> **画像来源：** ⚠️ **自动画像** —— 由实时行情与 K 线自动生成，**不是投研报告**，不含基本面判断与机构观点。'
+      : `> **画像来源：** ${pf.sourceDoc}${pf.reportDate ? `（原报告日期 ${pf.reportDate}）` : ''}`);
+  }
   L.push(`> **团队构成：** ${profilesData.template.team.join(' / ')}`);
   L.push('');
   L.push('---');
@@ -1620,7 +2170,11 @@ function buildReport(a) {
   L.push(`### 综合判定：${action.label}　%%评分 ${scores.composite} / 100%%`);
   L.push('');
   L.push(`- **技术面评分：** ${scores.technical} / 100`);
-  L.push(`- **策略面评分：** ${scores.profile ?? '（无画像）'} / 100`);
+  L.push(`- **策略面评分：** ${scores.profile != null ? `${scores.profile} / 100` : '（无投研画像，本项不计入）'}`);
+  L.push(`- **监控面评分：** ${scores.monitor != null ? `${scores.monitor} / 100（自动清单逐项判定汇总）` : '（无）'}`);
+  L.push(`- **权重：** ${scores.profile != null
+    ? `技术面 × ${pf?.profileQuality === 'high' ? '45%' : '75%'} + 策略面 × 其余`
+    : scores.monitor != null ? '技术面 × 60% + 监控面 × 40%' : '仅技术面'}`);
   L.push(`- **判定置信度：** ${action.confidence}%`);
   L.push(`- **操作含义：** ${action.desc}`);
   L.push('');
@@ -1676,7 +2230,7 @@ function buildReport(a) {
   /* ============ 二、财务与估值透视 ============ */
   L.push(`## 二、财务与估值透视`);
   L.push('');
-  if (hasProfile && pf.fundamentals && Object.keys(pf.fundamentals).length) {
+  if (hasProfile && !pf.auto && pf.fundamentals && Object.keys(pf.fundamentals).length) {
     const F = pf.fundamentals;
     L.push('**1. 财务基本面（源自投研文档）**');
     L.push('');
@@ -1690,6 +2244,26 @@ function buildReport(a) {
     };
     Object.entries(F).forEach(([k, v]) => L.push(`| ${label[k] || k} | ${v} |`));
     L.push('');
+  } else if (pf?.auto) {
+    /* 自动画像没有财务数据源 —— 如实说明，不臆造营收/利润/毛利率 */
+    L.push('**1. 财务基本面**：_自动画像不提供财务基本面 —— 系统未接入定期报告数据，'
+      + '不会臆造营收、净利润或毛利率。以下为实时行情快照。_');
+    L.push('');
+    L.push('| 行情指标 | 当前数值 |');
+    L.push('| --- | --- |');
+    const F = pf.fundamentals || {};
+    const label = {
+      peTtm: '市盈率 PE(TTM)', pb: '市净率 PB',
+      totalCap: '总市值（亿元）', floatCap: '流通市值（亿元）',
+      turnover: '换手率（%）', volumeRatio: '量比',
+      position52: '52周区间位置（%）', drawdownFromHigh: '距52周高点（%）',
+      atrPct: 'ATR 日均波动率（%）'
+    };
+    Object.entries(F)
+      .filter(([k, v]) => k !== 'source' && v != null && v !== '')
+      .forEach(([k, v]) => L.push(`| ${label[k] || k} | ${v} |`));
+    L.push(`| 数据源 | ${F.source || '实时行情'} |`);
+    L.push('');
   } else {
     L.push('**1. 财务基本面**：_该标的尚未导入财务数据，建议补充最新定期报告或调研数据。_');
     L.push('');
@@ -1700,8 +2274,12 @@ function buildReport(a) {
   L.push('| --- | --- | --- | --- |');
   const V = pf?.valuation || {};
   const refLow = V.fairPe?.[0], refHigh = V.fairPe?.[1];
-  const peJudge = q.peTtm == null ? '—' : refLow != null ? (q.peTtm < refLow ? '低于合理区间，安全边际抬升' : q.peTtm > refHigh ? '高于合理区间，估值透支风险' : '处于合理区间，估值中性') : '—';
-  L.push(`| 市盈率 PE(TTM) | ${q.peTtm ?? '—'} 倍 | ${refLow ? `${refLow}-${refHigh} 倍` : '行业均值'} | ${peJudge} |`);
+  const peJudge = q.peTtm == null ? '—'
+    : q.peTtm <= 0 ? '公司当前亏损，PE 不适用，需改用 PB 或 PS 判断'
+      : refLow != null
+        ? (q.peTtm < refLow ? '低于合理区间，安全边际抬升' : q.peTtm > refHigh ? '高于合理区间，估值透支风险' : '处于合理区间，估值中性')
+        : '未提供参照区间，不做分位判断';
+  L.push(`| 市盈率 PE(TTM) | ${q.peTtm ?? '—'} 倍 | ${refLow ? `${refLow}-${refHigh} 倍` : '—（未提供）'} | ${peJudge} |`);
   L.push(`| 市盈率 PE(动) / PE(静) | ${q.peDynamic ?? '—'} / ${q.peStatic ?? '—'} 倍 | — | 不同口径下的估值参照 |`);
   L.push(`| 市净率 PB | ${q.pb ?? '—'} 倍 | ${V.benchmark || '行业均值'} | — |`);
   L.push(`| 总市值 | ${q.totalCap ? q.totalCap.toFixed(0) + ' 亿元' : '—'} | 流通市值 ${q.floatCap ? q.floatCap.toFixed(0) + ' 亿元' : '—'} | — |`);
@@ -1840,11 +2418,13 @@ function buildReport(a) {
 
   L.push(`### 3. 核心监控清单（利好 / 利空双向）`);
   L.push('');
-  if (a.monitorsSource === 'generic') {
-    L.push(`> 该标的尚未导入专项研报画像，以下为**通用技术模板**：由实时指标自动生成的观察清单，回答"该盯哪些位、什么条件算好、什么条件算坏"。导入该股研报后会自动升级为专项清单。`);
+  if (a.monitorsSource === 'auto') {
+    L.push('> 该标的尚未导入专项研报画像，以下为**自动清单**：由实时指标派生，'
+      + '每一项都带自动判定口径，判定为「看多 / 看空」的项会**实际参与综合评分**（监控面），'
+      + '不再只是展示。导入该股研报后会自动切换为专项清单。');
     L.push('');
   }
-  L.push(monitorTable(a.monitors || pf?.monitors, a.monitorsSource));
+  L.push(monitorTable(a.monitors || pf?.monitors, a.monitorsSource, a.monitorSummary));
   L.push('');
 
   L.push(`### 4. 实时信号明细（${signals.all.length} 条）`);
@@ -1854,7 +2434,11 @@ function buildReport(a) {
 
   L.push('---');
   L.push('');
-  L.push(`*本报告由 StockSentry 智能盯盘系统于 ${now.toLocaleString('zh-CN')} 自动生成。行情与轨道类指标数据来自腾讯财经公开接口（成交额口径为人民币），财务与业务数据来自用户提供的投研文档（${hasProfile ? pf.sourceDoc : '未提供'}）。技术指标均为公开算法统计口径，可自行复算验证。*`);
+  L.push(`*本报告由 StockSentry 智能盯盘系统于 ${now.toLocaleString('zh-CN')} 自动生成。行情与轨道类指标数据来自腾讯财经公开接口（成交额口径为人民币），`
+    + (pf?.auto
+      ? '该标的未导入投研文档，画像与监控清单均由实时行情与 K 线自动派生，不含基本面与机构观点。'
+      : `财务与业务数据来自用户提供的投研文档（${hasProfile ? pf.sourceDoc : '未提供'}）。`)
+    + `技术指标均为公开算法统计口径，可自行复算验证。*`);
   L.push('');
   L.push('**免责声明：** 以上内容基于公开数据和量化分析，仅供参考，不构成投资建议。市场有风险，投资需谨慎。任何投资决策应结合个人风险承受能力、资金状况和投资目标独立判断，必要时咨询持牌专业机构。过往表现不预示未来收益。');
 
@@ -1975,10 +2559,15 @@ __define('engine', function (module, exports, require) {
 const src = require('source');
 const tech = require('tech');
 const rules = require('rules');
+const monitors = require('monitors');
+const portrait = require('portrait');
 const profilesData = require('profiles');
 
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const r2 = (x) => (Number.isFinite(x) ? +x.toFixed(2) : null);
+
+/** 无研报画像时，技术面与监控面在综合评分中的权重 */
+const AUTO_W_TECH = 0.6;
 
 function getProfile(code) {
   const c = src.normalize(code).code;
@@ -2061,37 +2650,19 @@ function buildPlan(ind, profile, actionKey) {
   const L = profile?.levels || {};
   const atr = ind.atr || P * 0.02;
 
-  const supports = (ind.keyLevels || []).filter((k) => k.side === 'support')
-    .sort((a, b) => b.price - a.price).slice(0, 5);
-  const resistances = (ind.keyLevels || []).filter((k) => k.side === 'resistance')
-    .sort((a, b) => a.price - b.price).slice(0, 5);
+  /* 支撑/阻力与价位兜底的推导统一收敛到 portrait.deriveLevels，
+     避免同一套「ATR + 关键位」逻辑在引擎与画像里各写一遍而产生口径漂移 */
+  const d = portrait.deriveLevels(ind);
+  const supports = d.supports;
+  const resistances = d.resistances;
 
-  // 兜底：以均线补齐支撑/阻力参考位
-  const maRef = [
-    { name: 'MA5', v: ind.ma.ma5 }, { name: 'MA10', v: ind.ma.ma10 }, { name: 'MA20', v: ind.ma.ma20 },
-    { name: 'MA30', v: ind.ma.ma30 }, { name: 'MA60', v: ind.ma.ma60 }, { name: 'MA120', v: ind.ma.ma120 },
-    { name: 'MA250', v: ind.ma.ma250 }
-  ].filter((x) => x.v != null);
-  if (supports.length < 2) {
-    maRef.filter((x) => x.v < P).sort((a, b) => b.v - a.v).slice(0, 3).forEach((x) =>
-      supports.push({ price: x.v, count: 0, side: 'support', dist: +(((x.v - P) / P) * 100).toFixed(2), label: x.name }));
-  }
-  if (resistances.length < 2) {
-    maRef.filter((x) => x.v > P).sort((a, b) => a.v - b.v).slice(0, 3).forEach((x) =>
-      resistances.push({ price: x.v, count: 0, side: 'resistance', dist: +(((x.v - P) / P) * 100).toFixed(2), label: x.name }));
-  }
-  resistances.sort((a, b) => a.price - b.price);
-  supports.sort((a, b) => b.price - a.price);
-
-  const entryLo = L.entry?.[0] ?? r2(P - atr * 1.5);
-  const entryHi = L.entry?.[1] ?? r2(P - atr * 0.5);
-  const stopLoss = L.stopLoss ?? r2(P - atr * 2.5);
-  const hardStop = L.hardStop ?? r2(P - atr * 3.5);
-  // 自动推导目标位时，要求与现价保持足够距离（≥1.2×ATR），避免目标位"贴脸"导致盈亏比失真
-  const minTgtDist = atr * 1.2;
-  const farRes = resistances.filter((r) => r.price >= P + minTgtDist);
-  const target1 = L.target1 ?? (farRes[0]?.price ?? r2(P + atr * 4));
-  let target2 = L.target2 ?? (farRes.filter((r) => r.price > target1)[0]?.price ?? r2(P + atr * 7));
+  const entryLo = L.entry?.[0] ?? d.entry[0];
+  const entryHi = L.entry?.[1] ?? d.entry[1];
+  const stopLoss = L.stopLoss ?? d.stopLoss;
+  const hardStop = L.hardStop ?? d.hardStop;
+  // 目标位已在 deriveLevels 内保证与现价保持 ≥1.2×ATR 距离，避免"贴脸"导致盈亏比失真
+  const target1 = L.target1 ?? d.target1;
+  let target2 = L.target2 ?? d.target2;
   if (target2 == null || target2 <= target1) target2 = r2(target1 + atr * 3);
 
   /* 盈亏比：以「参考入场价」为基准，而非机械用现价 */
@@ -2175,7 +2746,8 @@ function buildPlan(ind, profile, actionKey) {
     atr: r2(atr), atrPct: ind.atrPct,
     supports, resistances,
     positionLimitPct: positionPct,
-    fromProfile: !!(L.entry || L.stopLoss),
+    fromProfile: !!(L.entry || L.stopLoss) && !profile?.auto,
+    levelsSource: (!profile?.auto && (L.entry || L.stopLoss)) ? 'profile' : 'derived',
     canEnter: batchKind !== 'exit',
     batches: batchKind === 'exit' ? exitBatches : batches,
     batchKind
@@ -2203,24 +2775,46 @@ async function analyze(code, opts = {}) {
   const minutes = minResult.status === 'fulfilled' ? minResult.value : { ticks: [], preClose: quote.preClose };
 
   const ind = tech.computeIndicators(kline, quote);
-  const profile = getProfile(c);
+
+  /* 画像：优先用导入的投研画像；没有则为该标的现场合成一份"自动画像"，
+     让任意查询标的都能有完整的画像卡片与可触发的监控清单。
+     自动画像带 auto:true 标记，UI/报告必须显著标注来源，不得冒充研报。 */
+  const realProfile = getProfile(c);
+  const isAuto = !realProfile;
+  const profile = realProfile || portrait.synthesizeProfile({
+    ind, quote, flow, minutes, code: c, market, name: quote.name
+  });
 
   const ctx = { ind, quote, flow, profile, minutes };
+
+  /* 监控清单求值：专项清单与通用清单共用同一套脚手架。
+     专项清单信号归入画像面评分；自动画像的通用清单归入监控面评分（不混入画像面）。 */
+  const monEval = monitors.evaluate(profile?.monitors || [], ctx, { origin: isAuto ? 'monitor' : 'profile' });
+
   const signals = [
     ...rules.technicalRules(ctx),
     ...rules.channelRules(ctx),
-    ...rules.profileRules(ctx)
+    ...rules.profileRules(ctx),
+    ...monEval.signals
   ];
 
   const techScore = rules.scoreSignals(signals, (s) => s.origin === 'technical');
-  const pfSignals = signals.filter((s) => s.origin === 'profile');
-  const profileScore = pfSignals.length ? rules.scoreSignals(signals, (s) => s.origin === 'profile') : null;
+  const profileScore = signals.some((s) => s.origin === 'profile')
+    ? rules.scoreSignals(signals, (s) => s.origin === 'profile') : null;
+  const monitorScore = signals.some((s) => s.origin === 'monitor')
+    ? rules.scoreSignals(signals, (s) => s.origin === 'monitor') : null;
 
-  const quality = profile?.profileQuality || (profile ? 'high' : 'none');
+  const quality = realProfile?.profileQuality || (realProfile ? 'high' : 'auto');
   const wTech = quality === 'high' ? 0.45 : quality === 'low' ? 0.75 : 1;
-  const composite = profileScore != null
-    ? clamp(Math.round(techScore * wTech + profileScore * (1 - wTech)), 2, 98)
-    : techScore;
+
+  let composite;
+  if (profileScore != null) {
+    composite = clamp(Math.round(techScore * wTech + profileScore * (1 - wTech)), 2, 98);
+  } else if (monitorScore != null) {
+    composite = clamp(Math.round(techScore * AUTO_W_TECH + monitorScore * (1 - AUTO_W_TECH)), 2, 98);
+  } else {
+    composite = techScore;
+  }
 
   let action = decideAction({ composite, techScore, profileScore, ind, profile, signals });
   if (!profile?.cost) action = adaptForNoPosition(action);
@@ -2244,11 +2838,10 @@ async function analyze(code, opts = {}) {
   const bears = signals.filter((s) => s.side === 'bear');
   const neutrals = signals.filter((s) => s.side === 'neutral');
 
-  /* 监控清单：优先用画像里的专项清单；没有画像时退化为通用技术清单，
-     保证任何标的（含新加入自选股的）都能看到"看什么 / 什么算好 / 什么算坏" */
-  const profileMonitors = profile && Array.isArray(profile.monitors) ? profile.monitors : [];
-  const monitorsSource = profileMonitors.length ? 'profile' : 'generic';
-  const monitors = monitorsSource === 'profile' ? profileMonitors : rules.genericMonitors(ctx);
+  /* 监控清单：清单行本身（含每项状态）+ 求值产生的信号 + 概览 */
+  const monitorRows = monEval.rows;
+  const monitorSummary = monitors.summarize(monitorRows);
+  const monitorsSource = isAuto ? 'auto' : 'profile';
 
   return {
     code: c, market, name: quote.name || profile?.name || c,
@@ -2293,8 +2886,9 @@ async function analyze(code, opts = {}) {
       minutes: minutes.ticks || [],
       preClose: minutes.preClose || quote.preClose
     },
-    monitors,
+    monitors: monitorRows,
     monitorsSource,
+    monitorSummary,
     profile: profile ? {
       name: profile.name, tags: profile.tags, thesis: profile.thesis, moat: profile.moat,
       valuation: profile.valuation, levels: profile.levels, cost: profile.cost,
@@ -2302,13 +2896,16 @@ async function analyze(code, opts = {}) {
       businessMix: profile.businessMix, monitors: profile.monitors,
       fundamentals: profile.fundamentals, chips: profile.chips, risks: profile.risks,
       verdictNote: profile.verdictNote, sourceDoc: profile.sourceDoc, reportDate: profile.reportDate,
-      profileQuality: quality
+      profileQuality: quality,
+      /* 自动画像的诚信标记：UI/报告据此标注来源，不得展示为投研结论 */
+      auto: !!profile.auto,
+      disclaimer: profile.disclaimer || null
     } : null,
     signals: {
       all: signals.sort((a, b) => b.strength * b.weight - a.strength * a.weight),
       bull: bulls, bear: bears, neutral: neutrals
     },
-    scores: { composite, technical: techScore, profile: profileScore },
+    scores: { composite, technical: techScore, profile: profileScore, monitor: monitorScore },
     action,
     plan,
     generatedAt: new Date().toISOString()
@@ -2323,6 +2920,8 @@ window.SentryLib = {
   config: __require('config'),
   source: __require('source'),
   tech: __require('tech'),
+  monitors: __require('monitors'),
+  portrait: __require('portrait'),
   rules: __require('rules'),
   report: __require('report'),
   engine: __require('engine'),

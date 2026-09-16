@@ -18,6 +18,8 @@ const MODULES = [
   ['config', 'lib/config.js'],
   ['source', 'lib/source.js'],
   ['tech', 'lib/tech.js'],
+  ['monitors', 'lib/monitors.js'],
+  ['portrait', 'lib/portrait.js'],
   ['rules', 'lib/rules.js'],
   ['report', 'lib/report.js'],
   ['engine', 'lib/engine.js']
@@ -88,6 +90,8 @@ window.SentryLib = {
   config: __require('config'),
   source: __require('source'),
   tech: __require('tech'),
+  monitors: __require('monitors'),
+  portrait: __require('portrait'),
   rules: __require('rules'),
   report: __require('report'),
   engine: __require('engine'),

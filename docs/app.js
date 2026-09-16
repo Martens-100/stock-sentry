@@ -222,34 +222,52 @@ function renderDetail(d) {
   $('#cntAll').textContent = d.signals.all.length;
   renderSignals();
 
-  /* 监控清单：有专项画像就列画像清单，没有就列通用技术清单 —— 两种都必须显示 */
+  /* 监控清单：专项清单（来自投研文档）或自动清单（由实时行情派生），两种都必须显示。
+     每一项都已由 lib/monitors.js 的脚手架求值 —— 状态为看多/看空的会真正参与综合评分，
+     不再只是"展示一行说明"。 */
   const mons = d.monitors || d.profile?.monitors || [];
-  const generic = (d.monitorsSource || (d.profile?.monitors?.length ? 'profile' : 'generic')) === 'generic';
+  const src = d.monitorsSource || 'auto';
+  const sum = d.monitorSummary || null;
+  const SRC_META = {
+    profile: { cls: 'profile', text: '专项清单 · 来自投研文档' },
+    auto: { cls: 'generic', text: '自动清单 · 由实时行情派生（非投研结论）' }
+  };
+  const meta = SRC_META[src] || SRC_META.auto;
+
   $('#monitorCard').hidden = false;
-  $('#monitorTitle').textContent = '核心监控清单（利好 / 利空双向）';
+  $('#monitorTitle').textContent = '核心监控清单（利好 / 利空双向 · 自动判定）';
   const badge = $('#monitorBadge');
   badge.hidden = false;
-  badge.className = 'src-badge ' + (generic ? 'generic' : 'profile');
-  badge.textContent = generic ? '通用技术模板 · 导入研报可升级为专项清单' : '专项清单 · 来自投研文档';
+  badge.className = 'src-badge ' + meta.cls;
+  badge.textContent = meta.text;
+
+  const STATE_BADGE = {
+    bull: ['看多', 'bull'], bear: ['看空', 'bear'], neutral: ['中性', 'neutral'],
+    pending: ['待复核', 'muted'], manual: ['人工跟踪', 'muted'],
+    inapplicable: ['不适用', 'muted'], na: ['数据不足', 'muted']
+  };
+  const stateBadge = (s) => {
+    const [label, cls] = STATE_BADGE[s] || STATE_BADGE.na;
+    return `<span class="st-badge ${cls}">${label}</span>`;
+  };
+
+  const summaryLine = sum ? `<div class="mon-sum">
+      <b>清单结论：</b>${sum.verdict}
+      <span class="mon-sub">可判定 ${sum.judgeable} / 列出 ${sum.listed} 项</span>
+      ${sum.gapNote ? `<div class="mon-gap">${sum.gapNote}</div>` : ''}
+    </div>` : '';
+
   if (mons.length) {
-    $('#monitorTableWrap').innerHTML = generic
-      ? `<table class="data">
+    $('#monitorTableWrap').innerHTML = summaryLine + `<table class="data">
       <thead><tr><th>跟踪维度</th><th>关键指标</th><th>观察窗口</th><th>🔴 利好信号</th><th>🟢 利空信号</th><th>当前状态</th><th>权重</th></tr></thead>
-      <tbody>${mons.map((m) => `<tr>
+      <tbody>${mons.map((m) => `<tr class="${m.triggered ? 'mon-hit' : ''}">
         <td><b>${m.dim}</b></td><td>${m.metric}</td><td>${m.window}</td>
         <td style="color:var(--up)">${m.bull}</td><td style="color:var(--down)">${m.bear}</td>
-        <td class="mon-now">${m.now || '—'}</td>
-        <td>${'★'.repeat(Math.min(5, Math.round(m.weight / 2)))} ${m.weight}</td>
-      </tr>`).join('')}</tbody></table>`
-      : `<table class="data">
-      <thead><tr><th>跟踪维度</th><th>关键指标</th><th>观察窗口</th><th>🔴 利好信号</th><th>🟢 利空信号</th><th>权重</th></tr></thead>
-      <tbody>${mons.map((m) => `<tr>
-        <td><b>${m.dim}</b></td><td>${m.metric}</td><td>${m.window}</td>
-        <td style="color:var(--up)">${m.bull}</td><td style="color:var(--down)">${m.bear}</td>
+        <td class="mon-now">${stateBadge(m.state)}<div class="mon-note">${m.note || '—'}</div></td>
         <td>${'★'.repeat(Math.min(5, Math.round(m.weight / 2)))} ${m.weight}</td>
       </tr>`).join('')}</tbody></table>`;
   } else {
-    $('#monitorTableWrap').innerHTML = '<div class="hint">暂无可用监控项（行情数据不足）。</div>';
+    $('#monitorTableWrap').innerHTML = summaryLine + '<div class="hint">暂无可用监控项（行情数据不足）。</div>';
   }
 
   /* 画像 */
@@ -257,15 +275,47 @@ function renderDetail(d) {
   $('#profileCard').hidden = !pf;
   if (pf) {
     const blocks = [];
-    if (pf.thesis) blocks.push(`<div class="thesis"><b>核心逻辑：</b>${pf.thesis}</div>`);
+    if (pf.auto) {
+      blocks.push(`<div class="auto-note">⚠️ <b>自动画像</b>：本卡片由实时行情与 K 线自动生成，<b>不是投研报告</b>，`
+        + `不含基本面判断、机构观点与公司调研结论。${pf.disclaimer ? pf.disclaimer + '。' : ''}关键决策请自行核实。</div>`);
+    }
+    if (pf.thesis) blocks.push(`<div class="thesis"><b>${pf.auto ? '技术面画像：' : '核心逻辑：'}</b>${pf.thesis}</div>`);
     if (pf.moat) blocks.push(`<div class="thesis" style="background:#fafbfc;border-left-color:var(--line)"><b>竞争壁垒：</b>${pf.moat}</div>`);
+
     const boxes = [];
-    if (pf.valuation) boxes.push(`<div class="pf-box"><h4>估值框架</h4><p>PE(TTM) 参照 ${pf.valuation.fairPe?.join('-')} 倍<br>${pf.valuation.note || ''}</p></div>`);
+    if (pf.levels && pf.levels.entry && pf.levels.entry[0] != null) {
+      const L = pf.levels;
+      boxes.push(`<div class="pf-box"><h4>交易价位${pf.auto ? '（按 ATR 推导）' : ''}</h4><p>`
+        + `建仓区间 ${L.entry[0]} ~ ${L.entry[1]} 元<br>`
+        + `止损 ${L.stopLoss ?? '—'} / 硬止损 ${L.hardStop ?? '—'}<br>`
+        + `目标一 ${L.target1 ?? '—'} / 目标二 ${L.target2 ?? '—'}</p></div>`);
+    }
+    if (pf.valuation && pf.valuation.fairPe) {
+      boxes.push(`<div class="pf-box"><h4>估值框架</h4><p>PE(TTM) 参照 ${pf.valuation.fairPe.join('-')} 倍<br>${pf.valuation.note || ''}</p></div>`);
+    } else if (pf.valuation && pf.valuation.note) {
+      boxes.push(`<div class="pf-box"><h4>估值说明</h4><p>${pf.valuation.note}</p></div>`);
+    }
     if (pf.businessMix?.length) boxes.push(`<div class="pf-box"><h4>业务结构</h4><p>${pf.businessMix.map((b) => `${b.name} ${b.share}%（${b.trend}）`).join('<br>')}</p></div>`);
     if (pf.chips) boxes.push(`<div class="pf-box"><h4>筹码结构</h4><p>${pf.chips}</p></div>`);
-    if (pf.fundamentals && Object.keys(pf.fundamentals).length) boxes.push(`<div class="pf-box"><h4>关键财务</h4><p>${Object.values(pf.fundamentals).slice(0, 6).join('<br>')}</p></div>`);
+    if (pf.fundamentals && Object.keys(pf.fundamentals).length) {
+      if (pf.auto) {
+        const LABEL = {
+          peTtm: 'PE(TTM)', pb: 'PB', totalCap: '总市值', floatCap: '流通市值',
+          turnover: '换手率(%)', volumeRatio: '量比', position52: '52周位置(%)',
+          drawdownFromHigh: '距52周高点(%)', atrPct: 'ATR波动率(%)', source: '数据源'
+        };
+        const lines = Object.entries(pf.fundamentals)
+          .filter(([, v]) => v != null && v !== '')
+          .map(([k, v]) => `${LABEL[k] || k}：${v}`);
+        if (lines.length) boxes.push(`<div class="pf-box"><h4>行情快照</h4><p>${lines.join('<br>')}</p></div>`);
+      } else {
+        boxes.push(`<div class="pf-box"><h4>关键财务</h4><p>${Object.values(pf.fundamentals).slice(0, 6).join('<br>')}</p></div>`);
+      }
+    }
     if (pf.catalysts?.length) boxes.push(`<div class="pf-box"><h4>业绩兑现节奏</h4><p>${pf.catalysts.map((x) => `${x.time}：${x.event}`).join('<br>')}</p></div>`);
     if (pf.risks?.length) boxes.push(`<div class="pf-box"><h4>风险提示</h4><p>${pf.risks.map((x) => '· ' + x).join('<br>')}</p></div>`);
+    if (pf.sourceDoc) boxes.push(`<div class="pf-box"><h4>信息来源</h4><p>${pf.sourceDoc}${pf.reportDate ? `<br>报告日期：${pf.reportDate}` : ''}</p></div>`);
+
     $('#profileBody').innerHTML = blocks.join('') + `<div class="profile-grid">${boxes.join('')}</div>`;
   }
 
