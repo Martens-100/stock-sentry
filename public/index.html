@@ -168,13 +168,15 @@
       <div class="card chart-card chart-minute">
         <div class="card-title">
           <span class="chart-name">分时走势</span>
-          <span class="chart-legend"><i class="lg-price"></i>价格<i class="lg-avg"></i>均价</span>
+          <span class="chart-legend"><span class="lg"><i class="lg-price"></i>价格</span><span class="lg"><i class="lg-avg"></i>均价</span></span>
           <button class="chart-toggle" type="button" aria-expanded="false">展开
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
           </button>
         </div>
         <div class="chart-body">
           <canvas id="minuteChart" height="220"></canvas>
+          <!-- 「为什么这里是空的」必须看得见：空图不给理由，用户只能猜是坏了 -->
+          <div class="chart-note" id="minuteNote" hidden></div>
         </div>
       </div>
 
@@ -182,8 +184,8 @@
         <div class="card-title">
           <span class="chart-name">K线 · 均线 · 上下轨 · 导轨通道 · 成交量 · MACD（近120个交易日）</span>
           <span class="chart-legend">
-            <i class="lg-ma5"></i>MA5<i class="lg-ma10"></i>MA10<i class="lg-ma20"></i>MA20<i class="lg-ma60"></i>MA60
-            <i class="lg-bollu"></i>布林上轨<i class="lg-bolld"></i>布林下轨<i class="lg-rail"></i>导轨通道
+            <span class="lg"><i class="lg-ma5"></i>MA5</span><span class="lg"><i class="lg-ma10"></i>MA10</span><span class="lg"><i class="lg-ma20"></i>MA20</span><span class="lg"><i class="lg-ma60"></i>MA60</span>
+            <span class="lg"><i class="lg-bollu"></i>布林上轨</span><span class="lg"><i class="lg-bolld"></i>布林下轨</span><span class="lg"><i class="lg-rail"></i>导轨通道</span>
           </span>
           <button class="chart-toggle" type="button" aria-expanded="false">展开
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
@@ -191,11 +193,12 @@
         </div>
         <div class="chart-body">
           <div class="chart-toggles">
-            <label><input type="checkbox" id="tglBoll" checked> 布林上下轨</label>
-            <label><input type="checkbox" id="tglRail" checked> 回归导轨通道</label>
-            <label><input type="checkbox" id="tglMA" checked> 均线</label>
+            <label><input type="checkbox" id="tglBoll" data-opt="boll" checked> 布林上下轨</label>
+            <label><input type="checkbox" id="tglRail" data-opt="rail" checked> 回归导轨通道</label>
+            <label><input type="checkbox" id="tglMA" data-opt="ma" checked> 均线</label>
           </div>
           <canvas id="klineChart" height="380"></canvas>
+          <div class="chart-note" id="klineNote" hidden></div>
         </div>
       </div>
 

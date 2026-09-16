@@ -45,7 +45,9 @@ const state = {
   searchRows: null,  // 手机端「按名称/拼音添加」的搜索结果
   searchQ: '',
   warming: false,
-  ticking: false,
+  /* 注意：这里没有 "ticking" 了。定时刷新已改为「跑完一轮再排下一轮」的自调度
+     （见 startStream），不再需要这个"上一轮没跑完就跳过"的开关 ——
+     那个开关的副作用是弱网下连续跳轮，布林与导轨会长时间停在旧值上。 */
   narrow: null       // 上一次的断点归属，用于跨越 860px 时重置图表折叠态
 };
 
@@ -188,7 +190,50 @@ function clearSearchUi() {
  * 所以这里的首要目标不是「修」，而是「让失败自己说话」：
  * 失败瞬间就把环境事实、错误原文、传输层自检结果一次性摊开并可一键复制。
  */
-const BUILD_TAG = 'v1.2';
+const BUILD_TAG = 'v1.3';
+
+/**
+ * 图表自检：把「布林上下轨 / 导轨通道 / 分时」这条链路的每一环摊开。
+ *
+ * 为什么值得单独做一份：用户报「图像为空」时，能产生空白的通路至少有五条
+ * （数据源没给、样本不足、序列没对齐、画布宽度为 0、值域里混进 NaN），
+ * 而这五条**全都不抛错、不留日志**，外观一模一样。没有这份自检，
+ * 只能靠反复猜与截图对照；有了它，一次复制就能把范围缩到一层。
+ * 控制台里也可以直接跑 window.__chartDiag() 取同样的内容。
+ */
+function chartDiagRows() {
+  const rows = [];
+  const ch = state.data && state.data.chart;
+  const info = state.data && state.data.chartInfo;
+  const cvOf = (sel) => {
+    const cv = document.querySelector(sel);
+    if (!cv) return null;
+    const r = cv.getBoundingClientRect();
+    return { cssW: cv.clientWidth, cssH: cv.clientHeight, backingW: cv.width, backingH: cv.height, rectW: Math.round(r.width), rectH: Math.round(r.height) };
+  };
+  const n = (x) => (Array.isArray(x) ? x.length : x === null || x === undefined ? '—' : typeof x);
+
+  rows.push(['图表载荷', ch
+    ? `K线 ${n(ch.kline)} 根 · 布林上/中/下 ${n(ch.boll && ch.boll.up)}/${n(ch.boll && ch.boll.mid)}/${n(ch.boll && ch.boll.dn)} · 导轨 ${ch.rails ? `${n(ch.rails.up)} 点 (bars=${ch.rails.bars}, offset=${ch.rails.offset})` : '未返回'} · 分时 ${n(ch.minutes)} 点`
+    : '尚未取得（未选中标的或加载失败）']);
+  if (info) rows.push(['数据层自检', `原始K线 ${info.barCount} 根 · 当日bar ${info.todayBar ? (info.todayBar.mode + (info.todayBar.day ? '@' + info.todayBar.day : '') + (info.todayBar.why ? '(' + info.todayBar.why + ')' : '')) : '—'} · 布林 ${info.bollPoints} 点 · 导轨 ${info.railBars} 点${info.railReliable ? '' : '（参考性弱）'}`]);
+  if (ch && ch.degraded) rows.push(['降级原因', `<b>${esc(ch.degraded.reason)}</b> — ${esc(ch.degraded.text)}（bars=${ch.degraded.bars}）`]);
+
+  const k = cvOf('#klineChart');
+  const m = cvOf('#minuteChart');
+  rows.push(['K线画布', k ? `可见宽 ${k.cssW}×${k.cssH}（rect ${k.rectW}×${k.rectH}）· 位图 ${k.backingW}×${k.backingH}` : '❌ 未找到 #klineChart']);
+  rows.push(['分时画布', m ? `可见宽 ${m.cssW}×${m.cssH}（rect ${m.rectW}×${m.rectH}）· 位图 ${m.backingW}×${m.backingH}` : '❌ 未找到 #minuteChart']);
+  rows.push(['画布尺寸异常', pendingChartRepaint
+    ? `<b>是</b> — 上次绘制时尺寸不可用（w=${pendingChartRepaint.w}），已登记待补画；展开图表或旋转屏幕会自动重画`
+    : '否（绘制时尺寸正常）']);
+  rows.push(['叠加层开关', `布林 ${chartOpts.boll ? '开' : '关'} · 导轨 ${chartOpts.rail ? '开' : '关'} · 均线 ${chartOpts.ma ? '开' : '关'}`]);
+  const viz = document.querySelector('#railViz');
+  rows.push(['轨道可视化', viz
+    ? `${viz.children.length} 行${viz.querySelectorAll('.rv-row-empty').length ? `（其中 ${viz.querySelectorAll('.rv-row-empty').length} 行为「不可用」占位）` : ''}`
+    : '❌ 未找到 #railViz']);
+  return rows;
+}
+window.__chartDiag = () => chartDiagRows().map(([k, v]) => k + '：' + String(v).replace(/<[^>]+>/g, '')).join('\n');
 
 /** 同步即可取到的环境事实 —— 不需要用户点任何按钮 */
 function envFacts() {
@@ -263,6 +308,10 @@ function showDiag(err, code) {
       <tr><td>错误类型</td><td><code>${esc((err && err.name) || 'Error')}</code></td></tr>
       <tr><td>错误信息</td><td><code>${esc((err && err.message) || String(err))}</code></td></tr>
       ${envFacts().map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join('')}
+    </table>
+    <h4 class="diag-sub">图表自检（K线 / 布林上下轨 / 导轨通道 / 分时）</h4>
+    <table class="diag-tb">
+      ${chartDiagRows().map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join('')}
     </table>
     <div class="diag-actions">
       <button class="btn primary" id="diagCopy">复制诊断信息</button>
@@ -681,10 +730,33 @@ function railRow(label, lo, hi, mid, pct, color, markVal, tickLabel) {
   </div>`;
 }
 
+/** 数据不可用时的占位行 —— **绝不让整行凭空消失**。
+    「这条线数据异常」和「这张图什么都没有」是两件事，用户必须能分清；
+    原来 `railRow` 用 `if (!(hi > lo)) return ''` 静默丢行，
+    三条轨道全丢时 railViz 直接变成一片空白，看上去就是「图像为空」。 */
+function railRowEmpty(label, reason) {
+  return `<div class="rv-row rv-row-empty">
+    <div class="rv-label">${label}</div>
+    <div><div class="rv-track rv-track-empty"></div></div>
+    <div class="rv-val">不可用<br><em>${esc(reason)}</em></div>
+  </div>`;
+}
+
 function renderChannel(ind) {
-  const v = ind.channelVerdict;
   const box = $('#chGrid');
-  if (!v) { box.innerHTML = '<div class="hint">轨道数据不可用</div>'; return; }
+  const viz = $('#railViz');
+  const v = ind && ind.channelVerdict;
+  /* 拿不到研判结论时，必须**同时**把可视化区清成明确说明。
+     原来这里只 `return`，railViz 会留着上一只标的的图 ——
+     用户看到的是 A 的轨道套在 B 的标题下，比空白更危险。 */
+  if (!v) {
+    const why = ind ? '本标的未返回轨道指标（通常是日K数据不足）' : '尚未取得行情数据';
+    if (box) box.innerHTML = `<div class="hint">轨道数据不可用：${why}</div>`;
+    if (viz) viz.innerHTML = `<div class="rv-empty-hint">轨道可视化不可用 —— ${why}</div>`;
+    const z0 = $('#chZone'); if (z0) z0.textContent = '—';
+    const a0 = $('#chAdvice'); if (a0) a0.textContent = '—';
+    return;
+  }
 
   const z = $('#chZone');
   z.textContent = v.zone;
@@ -713,25 +785,87 @@ function renderChannel(ind) {
      </div></div>` : ''
   ].join('');
 
+  /* 三行轨道：每一行要么给出真实的区间与当前位置，要么给出**可见的**不可用原因。
+     不允许出现「行消失了，用户以为本来就是两条」这种情况。 */
   const rows = [];
-  if (bi) rows.push(railRow('布林轨道', v.boll.dn, v.boll.up, v.boll.mid, bi.pctB, '#7e57c2', fmt(ind.price), v.bollLabel));
-  if (ra && ra.up > ra.dn) rows.push(railRow('回归导轨', ra.dn, ra.up, ra.mid, ra.pctChan, '#ff9800', fmt(ind.price), v.railPosLabel));
-  if (dc) rows.push(railRow('唐奇安区间', dc.lower, dc.upper, dc.mid, dc.pct / 100, '#0288d1', fmt(ind.price), `区间 ${dc.pct}%`));
-  $('#railViz').innerHTML = rows.join('');
+  if (bi && v.boll && v.boll.up > v.boll.dn) {
+    rows.push(railRow('布林轨道', v.boll.dn, v.boll.up, v.boll.mid, bi.pctB, '#7e57c2', fmt(ind.price), v.bollLabel));
+  } else {
+    rows.push(railRowEmpty('布林轨道', bi ? '上下轨重合或缺失' : '未返回布林带'));
+  }
+  if (ra && ra.up > ra.dn) {
+    rows.push(railRow('回归导轨', ra.dn, ra.up, ra.mid, ra.pctChan, '#ff9800', fmt(ind.price), v.railPosLabel));
+  } else {
+    rows.push(railRowEmpty('回归导轨', ra ? '上下轨重合' : '样本不足（需 ≥12 根日K）'));
+  }
+  if (dc && dc.upper > dc.lower) {
+    rows.push(railRow('唐奇安区间', dc.lower, dc.upper, dc.mid, dc.pct / 100, '#0288d1', fmt(ind.price), `区间 ${dc.pct}%`));
+  } else {
+    rows.push(railRowEmpty('唐奇安区间', dc ? '上下沿重合' : '未返回区间数据'));
+  }
+  if (viz) viz.innerHTML = rows.join('');
 }
 
 /* ============================ 图表 ============================ */
+/* 画布尺寸不可用时的「待补画」登记。
+   为什么需要它：卡片折叠（max-height:0）、容器 display:none、后台标签页、首帧未布局时，
+   clientWidth 会是 0。此时 cv.width = 0，之后所有绘制都静默落到画布之外 ——
+   不抛错、不留痕迹，只是一块白。用户报的「图像为空」有一半来自这一幕。
+   正确做法不是"照样画"，而是登记下来，等尺寸真的可用时补画一次。 */
+let pendingChartRepaint = null;
+
 function setupCanvas(cv, h) {
+  if (!cv) return { ok: false, reason: 'missing-canvas' };
   const dpr = window.devicePixelRatio || 1;
-  const w = cv.clientWidth || cv.parentElement.clientWidth;
+  const w = Math.round(cv.clientWidth || (cv.parentElement && cv.parentElement.clientWidth) || 0);
+  const hh = Math.round(h);
+  if (w < 40 || hh < 40) {
+    pendingChartRepaint = { reason: 'canvas-zero-size', w, h: hh, at: Date.now() };
+    return { ok: false, reason: 'canvas-zero-size', w, h: hh };
+  }
   cv.width = w * dpr;
-  cv.height = h * dpr;
-  cv.style.height = h + 'px';
+  cv.height = hh * dpr;
+  cv.style.height = hh + 'px';
   const ctx = cv.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, w, h);
-  return { ctx, w, h };
+  ctx.clearRect(0, 0, w, hh);
+  return { ok: true, ctx, w, h: hh, dpr };
 }
+
+/**
+ * 图表降级说明。**用 DOM 而不是画在 canvas 上** —— 画布宽度为 0 时根本画不出字，
+ * 而「为什么这里是空的」恰恰要在那一刻告诉用户。空图不给理由，
+ * 用户只能猜到「坏了」；给了理由，他能分清是数据源的问题还是自己的网络。
+ */
+function setChartNote(which, text) {
+  const el = document.getElementById(which + 'Note');
+  if (!el) return;
+  const card = el.closest && el.closest('.chart-card');
+  if (text) { el.textContent = text; el.hidden = false; if (card) card.classList.add('has-note'); }
+  else { el.textContent = ''; el.hidden = true; if (card) card.classList.remove('has-note'); }
+}
+
+/** 图表区说明的叶子渲染器：只读 state，不碰别的渲染函数 */
+function renderChartNotes() {
+  const d = state.data;
+  const ch = d && d.chart;
+  if (!ch) { setChartNote('minute', ''); setChartNote('kline', ''); return; }
+  const deg = ch.degraded;
+  if (deg) {
+    const why = deg.reason === 'no-kline'
+      ? '数据源（腾讯财经）本次未返回日K数据'
+      : `日K仅 ${deg.bars} 根，不足指标计算窗口`;
+    setChartNote('kline', `K线、布林上下轨与导轨通道暂不可用 —— ${why}。行情与指标已自动降级为可用部分，可稍后重试。`);
+    /* 空图的原因除了「数据源没给」，还有「序列没对齐 / 画布 0 宽 / 值域混进 NaN」等
+       几条同样静默的通路，外观完全一样。顺手把自检打进控制台，远程排查时省一轮来回。 */
+    try { console.info('[StockSentry] 图表自检\n' + window.__chartDiag()); } catch (_) {}
+    setChartNote('minute', '');
+    return;
+  }
+  setChartNote('kline', '');
+  setChartNote('minute', ch.minutes && ch.minutes.length ? '' : '暂无分时数据（非交易时段或数据源限制）');
+}
+
 const COL = {
   up: '#d0342c', down: '#12855a', grid: '#eef0f3', ink: '#7a828f', line: '#2450a4', avg: '#e6a23c',
   ma5: '#e6a23c', ma10: '#2450a4', ma20: '#8e44ad', ma60: '#12855a',
@@ -741,11 +875,13 @@ const chartOpts = { boll: true, rail: true, ma: true, cross: null };
 
 function drawMinute(chart) {
   const cv = $('#minuteChart');
-  const { ctx, w, h } = setupCanvas(cv, 220);
+  const c = setupCanvas(cv, 220);
+  if (!c.ok) return;   // 尺寸不可用：已登记待补画，这里不画废图
+  const { ctx, w, h } = c;
   const padL = 52, padR = 56, padT = 12, padB = 34;
   const cw = w - padL - padR, chh = h - padT - padB;
-  const ticks = chart.minutes || [];
-  const preClose = chart.preClose;
+  const ticks = (chart && chart.minutes) || [];
+  const preClose = chart && chart.preClose;
 
   ctx.font = '11px -apple-system,sans-serif';
   if (!ticks.length) {
@@ -836,11 +972,29 @@ function drawMinute(chart) {
 
 function drawKline(chart, ind) {
   const cv = $('#klineChart');
-  const { ctx, w, h } = setupCanvas(cv, 380);
+  const c = setupCanvas(cv, 380);
+  if (!c.ok) return;   // 尺寸不可用：已登记待补画，不画废图
+  const { ctx, w, h } = c;
   const padL = 52, padR = 16, padT = 10, padB = 22;
   const cw = w - padL - padR;
-  const k = chart.kline || [];
-  if (!k.length) return;
+  const k = (chart && chart.kline) || [];
+  /* 绘图区宽度必须为正：极窄视口下 cw ≤ 0 会让 step ≤ 0，
+     所有点被算到画布左侧之外 —— 又是"一片空白但不报错"。 */
+  if (cw < 40) {
+    ctx.font = '12px -apple-system,sans-serif';
+    ctx.fillStyle = COL.ink; ctx.textAlign = 'center';
+    ctx.fillText('可用宽度不足，无法绘制图表', w / 2, h / 2);
+    return;
+  }
+  /* 没有 K 线就画一句人话再收工。
+     原来是直接 `return` —— 留下整块白，连「是数据源没给、还是对齐炸了、还是代码坏了」
+     都无从判断；这正是被报成「图像为空」的那种形态。空要有空的理由。 */
+  if (!k.length) {
+    ctx.font = '12px -apple-system,sans-serif';
+    ctx.fillStyle = COL.ink; ctx.textAlign = 'center';
+    ctx.fillText('暂无K线数据（数据源未返回日K）', w / 2, h / 2);
+    return;
+  }
 
   const h1 = Math.round((h - padT - padB) * 0.58);          // K线区
   const h2 = Math.round((h - padT - padB) * 0.16);          // 量区
@@ -854,17 +1008,78 @@ function drawKline(chart, ind) {
   const ma = (n) => closes.map((_, i) => (i < n - 1 ? null : closes.slice(i - n + 1, i + 1).reduce((a, b) => a + b, 0) / n));
   const ma5 = ma(5), ma10 = ma(10), ma20 = ma(20), ma60 = ma(60);
 
-  /* ---- 轨道序列对齐（导轨只覆盖最近 bars 根） ---- */
-  const boll = chartOpts.boll ? chart.boll : null;
-  const rail = chartOpts.rail && chart.rails ? chart.rails : null;
-  const railOffset = rail ? Math.max(0, k.length - rail.bars) : 0;
+  /* ---- 轨道序列对齐 ----
+     导轨只覆盖最近 bars 根，必须落回 K 线的正确下标上。
+     对齐方式有优先级，因为「靠长度相减」是一个**隐式契约**：
+     它只在「kline 截断长度」与「导轨窗口来源」恰好一致时成立，
+     任何一侧改了口径，导轨就会被整体画到画布之外 —— 整条导轨消失，
+     而且不抛错、不告警。所以：
+       ① 优先按 dates 锚点（导轨自带首点日期）在 K 线日期里定位；
+       ② 退化用载荷显式给出的 offset；
+       ③ 最后才用长度相减（历史兼容）。
+     并把结果裁剪到画布内，宁可少画一点也不画到外面去。 */
+  const railRaw = chartOpts.rail && chart && chart.rails ? chart.rails : null;
+  const railLenRaw = railRaw ? Math.min(
+    Array.isArray(railRaw.up) ? railRaw.up.length : 0,
+    Array.isArray(railRaw.dn) ? railRaw.dn.length : 0
+  ) : 0;
+  let rail = null;
+  let railOffset = 0;
+  let railLen = 0;
+  if (railRaw && railLenRaw > 2) {
+    const kd = k.map((x) => x.date);
+    const anchor = Array.isArray(railRaw.dates) && railRaw.dates.length ? railRaw.dates[0] : null;
+    const byDate = anchor ? kd.indexOf(anchor) : -1;
+    railOffset = byDate >= 0 ? byDate
+      : Number.isFinite(railRaw.offset) ? railRaw.offset
+        : Math.max(0, k.length - railLenRaw);
+    railOffset = Math.max(0, Math.min(k.length - 3, railOffset));
+    railLen = Math.min(railLenRaw, k.length - railOffset);
+    if (railLen > 2) {
+      rail = {
+        up: railRaw.up.slice(0, railLen),
+        mid: Array.isArray(railRaw.mid) ? railRaw.mid.slice(0, railLen) : [],
+        dn: railRaw.dn.slice(0, railLen)
+      };
+      /* railOffset 此刻已经是「首点对应的 K 线下标」，下面统一按它绘制，无需再换算 */
+    }
+  }
+  /* ---- 布林序列对齐 ----
+     载荷已保证等长，这里仍做一次防御：长度不符时按末尾对齐，
+     多出来的部分锯掉。宁可少画一段，也不要把曲线画到别的交易日上去。 */
+  const alignSeries = (arr) => {
+    if (!Array.isArray(arr) || !arr.length) return null;
+    if (arr.length === k.length) return arr;
+    if (arr.length > k.length) return arr.slice(-k.length);
+    return new Array(k.length - arr.length).fill(null).concat(arr);
+  };
+  const boll = chartOpts.boll && chart ? chart.boll : null;
 
-  const rangeVals = [...k.map((x) => x.high), ...k.map((x) => x.low)];
-  if (boll) { [boll.up, boll.dn].forEach((arr) => arr.forEach((v) => { if (v != null) rangeVals.push(v); })); }
-  if (rail) { [rail.up, rail.dn].forEach((arr) => arr.forEach((v) => { if (v != null) rangeVals.push(v); })); }
+  /* ---- 值域 ----
+     只能由**有限数**决定。这里必须过滤：只要混进一个 undefined / NaN，
+     Math.max 就返回 NaN，Y() 全线变 NaN，整张图一笔都画不出来 ——
+     不抛错、不告警，就是一块白。这又是一条「图像为空」的静默通路，堵掉。 */
+  const rangeVals = [];
+  k.forEach((x) => {
+    if (Number.isFinite(x.high)) rangeVals.push(x.high);
+    if (Number.isFinite(x.low)) rangeVals.push(x.low);
+  });
+  const bollUp = boll ? alignSeries(boll.up) : null;
+  const bollMid = boll ? alignSeries(boll.mid) : null;
+  const bollDn = boll ? alignSeries(boll.dn) : null;
+  [bollUp, bollDn, rail && rail.up, rail && rail.dn].forEach((arr) => {
+    if (Array.isArray(arr)) arr.forEach((v) => { if (Number.isFinite(v)) rangeVals.push(v); });
+  });
+  if (rangeVals.length < 2) {
+    ctx.font = '12px -apple-system,sans-serif';
+    ctx.fillStyle = COL.ink; ctx.textAlign = 'center';
+    ctx.fillText('K线数值异常，无法绘制（数据源返回了非数值行情）', w / 2, h / 2);
+    return;
+  }
   const hi = Math.max(...rangeVals);
   const lo = Math.min(...rangeVals);
-  const pad = (hi - lo) * 0.05;
+  /* hi === lo 时 (hi+pad)-(lo-pad) 会退化成 0 → 除零 → NaN → 同样整图空白 */
+  const pad = hi > lo ? (hi - lo) * 0.05 : Math.max(Math.abs(hi) * 0.005, 0.01);
   const Y1 = (p) => y1 + h1 * (1 - (p - (lo - pad)) / ((hi + pad) - (lo - pad)));
   const X = (i) => padL + step * i + step / 2;
 
@@ -880,7 +1095,7 @@ function drawKline(chart, ind) {
   // 日期
   ctx.fillStyle = COL.ink; ctx.textAlign = 'center';
   [0, Math.floor(k.length / 3), Math.floor((k.length * 2) / 3), k.length - 1].forEach((i) =>
-    ctx.fillText(k[i].date.slice(5), X(i), y3 + h3 + 16));
+    ctx.fillText(String((k[i] && k[i].date) || '').slice(5), X(i), y3 + h3 + 16));
 
   // ---- K线 ----
   k.forEach((bar, i) => {
@@ -917,20 +1132,21 @@ function drawKline(chart, ind) {
     ctx.closePath(); ctx.fillStyle = color; ctx.fill(); ctx.restore();
   };
 
-  /* ---- 布林上下轨 ---- */
-  if (boll && boll.up && boll.dn) {
-    pathFill(boll.up, boll.dn, 'rgba(126,87,194,.07)');
-    pathLine(boll.up, COL.bollUp, 1.1);
-    pathLine(boll.dn, COL.bollDn, 1.1);
-    pathLine(boll.mid, COL.bollMid, 1, [4, 3]);
+  /* ---- 布林上下轨 ----
+     用对齐后的序列绘制；只要有一条不可用就不画（而不是画半条让人误读） */
+  if (bollUp && bollDn) {
+    pathFill(bollUp, bollDn, 'rgba(126,87,194,.07)');
+    pathLine(bollUp, COL.bollUp, 1.1);
+    pathLine(bollDn, COL.bollDn, 1.1);
+    if (bollMid) pathLine(bollMid, COL.bollMid, 1, [4, 3]);
   }
 
-  /* ---- 回归导轨通道 ---- */
-  if (rail && rail.up && rail.dn) {
+  /* ---- 回归导轨通道（按 railOffset 落回 K 线下标，已裁剪在画布内） ---- */
+  if (rail) {
     pathFill(rail.up, rail.dn, 'rgba(255,152,0,.09)', railOffset);
     pathLine(rail.up, COL.rail, 1.3, [6, 3], railOffset);
     pathLine(rail.dn, COL.rail, 1.3, [6, 3], railOffset);
-    pathLine(rail.mid, 'rgba(255,152,0,.75)', 1, [2, 3], railOffset);
+    if (rail.mid.length) pathLine(rail.mid, 'rgba(255,152,0,.75)', 1, [2, 3], railOffset);
   }
 
   // ---- 均线 ----
@@ -940,18 +1156,19 @@ function drawKline(chart, ind) {
   }
 
   // ---- 成交量 ----
-  const maxV = Math.max(...k.map((x) => x.volume));
+  const volVals = k.map((x) => (Number.isFinite(x.volume) ? x.volume : 0));
+  const maxV = Math.max(...volVals, 1);
   k.forEach((bar, i) => {
-    const bh = (bar.volume / maxV) * h2;
+    const bh = (volVals[i] / maxV) * h2;
     ctx.fillStyle = bar.close >= bar.open ? 'rgba(208,52,44,.60)' : 'rgba(18,133,90,.60)';
     ctx.fillRect(X(i) - bw / 2, y2 + h2 - bh, bw, bh);
   });
   ctx.strokeStyle = COL.grid; ctx.beginPath(); ctx.moveTo(padL, y2 + h2); ctx.lineTo(padL + cw, y2 + h2); ctx.stroke();
 
   // ---- MACD ----
-  const dif = chart.macd?.dif?.slice(-k.length) || [];
-  const dea = chart.macd?.dea?.slice(-k.length) || [];
-  const hist = chart.macd?.hist?.slice(-k.length) || [];
+  const dif = alignSeries(chart.macd && chart.macd.dif) || [];
+  const dea = alignSeries(chart.macd && chart.macd.dea) || [];
+  const hist = alignSeries(chart.macd && chart.macd.hist) || [];
   const mMax = Math.max(...hist.map(Math.abs), ...dif.map(Math.abs), ...dea.map(Math.abs), 0.01);
   const Y3 = (v) => y3 + h3 / 2 - (v / mMax) * (h3 / 2) * 0.9;
   ctx.strokeStyle = '#e6e8eb'; ctx.beginPath(); ctx.moveTo(padL, y3 + h3 / 2); ctx.lineTo(padL + cw, y3 + h3 / 2); ctx.stroke();
@@ -1172,7 +1389,17 @@ function refreshAll() {
   renderDetail(state.data);
   renderAll();
   renderChartLabel();
+  renderChartNotes();
   renderSheetState();
+}
+
+/** 尺寸恢复后补画一次。
+    折叠展开、旋转屏幕、从后台标签页切回 —— 这些时刻画布才有真实宽度，
+    而数据早就在手上。没有这一步，"待补画"就只是一个记录而已。 */
+function repaintChartsIfPending(force) {
+  if (!pendingChartRepaint && !force) return;
+  pendingChartRepaint = null;
+  redrawCharts();
 }
 
 /* ------------------- 交互层：改数据 → 调 refreshAll ------------------- */
@@ -1285,28 +1512,37 @@ async function addStock() {
 }
 
 /* ============================ 实时刷新 ============================ */
+/**
+ * 自调度循环：**跑完一轮，再隔 refreshSec 排下一轮**。
+ *
+ * 为什么不用 setInterval + 「上一轮没跑完就跳过」：
+ * 那种写法在弱网下会连续跳过若干轮 —— 只要单次请求耗时超过一个周期，
+ * 就会「跑一轮、跳两轮、再跑一轮」，布林上下轨与导轨于是长时间停在旧值上。
+ * 用户报的「图像不随实时状态更新」，本质就是这段调度漂了。
+ * 自调度保证的是：每完成一轮，间隔 refreshSec 秒再跑，永不堆积、也永不长时间停滞。
+ *
+ * 每轮的顺序也有讲究：先拉自选（胶囊与清单的价格），再分析当前标的（图表与轨道），
+ * 最后 `refreshAll()` 一次性重画 —— 布林与导轨用的就是这一轮刚到的实时价。
+ */
 function startStream() {
-  if (state.timer) clearInterval(state.timer);
-  state.timer = setInterval(async () => {
-    if (!$('#autoRefresh').checked) return;
-    if (document.hidden) return;
-    if (state.ticking) return;   // 上一轮还没跑完就跳过：弱网下 setInterval 不会等 await，
-                                 // 不挡一下就会出现「请求一层叠一层」，越慢越堵
-    state.ticking = true;
+  if (state.timer) clearTimeout(state.timer);
+  state.timer = setTimeout(async function loop() {
+    if (!state.timer) return;                        // 已被停止
     try {
-      await loadWatchlist();
-      const cur = state.current;
-      if (!cur) return;
-      const r = await api('/api/analyze?code=' + encodeURIComponent(cur));
-      if (state.current !== cur) return;            // 刷新期间用户已切换标的，丢弃旧响应
-      if (r.ok) { state.data = r.data; applyMeta(cur, r.data); refreshAll(); }
+      if ($('#autoRefresh').checked && !document.hidden) {
+        await loadWatchlist();
+        const cur = state.current;
+        if (cur) {
+          const r = await api('/api/analyze?code=' + encodeURIComponent(cur));
+          if (state.current === cur && r.ok) { state.data = r.data; applyMeta(cur, r.data); refreshAll(); }
+        }
+      }
     } catch (_) {
       /* 定时刷新失败保持静默（与原行为一致）：
          它由时钟触发、不来自用户操作，弹「分析失败」只会让人以为是自己点坏了。
          真正的失败可见性由用户主动触发的路径（selectStock）负责。 */
-    } finally {
-      state.ticking = false;
     }
+    state.timer = setTimeout(loop, state.refreshSec * 1000);
   }, state.refreshSec * 1000);
 }
 
@@ -1338,10 +1574,23 @@ $$('#signalTabs .tab').forEach((t) => t.addEventListener('click', () => {
   renderSignals();
 }));
 $('#genReport').addEventListener('click', genReport);
+/* 图表叠加层开关：按 **data-opt** 属性绑定，不再拼 id。
+   原来写的是 `$('#tgl' + k[0].toUpperCase() + k.slice(1))` → 对 'ma' 拼出 `#tglMa`，
+   而 HTML 里的 id 是 `tglMA` —— 大小写不匹配，`el` 为 null，
+   于是「均线」开关从上线起就一直是死的（点了没反应，也不报错）。
+   拼 id 这种做法一旦命名风格变了就会静默失效，改成声明式属性后由 HTML 自己描述绑定关系。 */
+$$('.chart-toggles input[data-opt]').forEach((el) => {
+  const key = el.getAttribute('data-opt');
+  if (!(key in chartOpts)) return;
+  el.checked = key === 'cross' ? !!chartOpts[key] : !!chartOpts[key];
+  el.addEventListener('change', () => { chartOpts[key] = el.checked; redrawCharts(); });
+});
 ['boll', 'rail', 'ma'].forEach((k) => {
-  const el = $('#tgl' + k[0].toUpperCase() + k.slice(1));
+  if (document.querySelector('.chart-toggles input[data-opt="' + k + '"]')) return;
+  const el = $('#tgl' + k[0].toUpperCase() + k.slice(1));   // 兼容旧结构，保留一条退路
   if (el) el.addEventListener('change', () => { chartOpts[k] = el.checked; redrawCharts(); });
 });
+
 $('#refreshAll').addEventListener('click', async () => {
   await loadWatchlist();
   if (state.current) selectStock(state.current);
@@ -1403,9 +1652,15 @@ document.addEventListener('click', (e) => {
       const open = !chartIsOpen(card);
       setChartOpen(card, open);
       renderChartLabel();
-      /* 展开时重画：折叠期间画布被 max-height 压成 0，某些引擎会把
-         clientWidth 记成上一次的测量值，直接拿来画会得到一张错位的图 */
-      if (open) redrawCharts();
+      /* 展开后必须补画，而且要在**布局落定之后**画：
+         折叠期间画布被 max-height 压成 0，某些引擎会把 clientWidth 记成上一次的测量值；
+         跨断点、旋转屏幕后也会变。所以统一走 rAF —— 布局一定已经完成。 */
+      if (open) {
+        redrawCharts();                      // 先按当前宽度画一版
+        requestAnimationFrame(() => repaintChartsIfPending(true));  // 若当时宽度还是 0，补一次
+      } else {
+        renderChartNotes();
+      }
     }
     return;
   }
@@ -1461,20 +1716,34 @@ document.addEventListener('keydown', (e) => {
   }, { passive: true });
 })();
 
-/* 视口宽度变化：重画图表 + 跨断点时回到该端的默认态 */
+/* 视口宽度变化：重画图表 + 跨断点时回到该端的默认态。
+   防抖的理由：手机上拖动地址栏 / 软键盘弹出会连续触发 resize，
+   每一帧都重画 120 根 K 线 + MACD 是白烧电。 */
+let resizeTimer = 0;
 window.addEventListener('resize', () => {
-  redrawCharts();
-  const narrow = isNarrow();
-  if (narrow !== state.narrow) {
-    state.narrow = narrow;
-    if (!narrow && state.sheetOpen) state.sheetOpen = false;
-    resetChartsForViewport();
-    refreshAll();
-  }
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    redrawCharts();
+    if (pendingChartRepaint) requestAnimationFrame(() => repaintChartsIfPending());
+    const narrow = isNarrow();
+    if (narrow !== state.narrow) {
+      state.narrow = narrow;
+      if (!narrow && state.sheetOpen) state.sheetOpen = false;
+      resetChartsForViewport();
+      refreshAll();
+      /* 跨断点会改变折叠态，宽度也可能在这一次布局里才确定，再补一帧 */
+      requestAnimationFrame(() => repaintChartsIfPending(true));
+    }
+  }, 120);
 });
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && state.current) selectStock(state.current);
 });
+/* 字体就绪后布局宽度可能微变，补画一次；同时兜住"首屏尺寸还没算出来"的情况 */
+if (document.fonts && document.fonts.ready) {
+  document.fonts.ready.then(() => repaintChartsIfPending()).catch(() => {});
+}
+window.addEventListener('load', () => requestAnimationFrame(() => repaintChartsIfPending()));
 
 /* ============================ 启动 ============================ */
 (async function init() {
