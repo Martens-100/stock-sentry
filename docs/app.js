@@ -190,7 +190,7 @@ function clearSearchUi() {
  * 所以这里的首要目标不是「修」，而是「让失败自己说话」：
  * 失败瞬间就把环境事实、错误原文、传输层自检结果一次性摊开并可一键复制。
  */
-const BUILD_TAG = 'v1.3';
+const BUILD_TAG = 'v1.4';
 
 /**
  * 图表自检：把「布林上下轨 / 导轨通道 / 分时」这条链路的每一环摊开。
@@ -708,6 +708,15 @@ const hexA = (hex, a) => {
 };
 const clampN = (x, a, b) => Math.min(b, Math.max(a, x));
 
+/** 把建议文案按句读点拆开，用于「窄屏逐句成行 / 宽屏横向铺满」的排布。
+    **绝不能用 lookbehind**（`(?<=…)`）：目标用户里有 iOS 14 的 Safari，
+    遇到 lookbehind 会在解析阶段直接抛 SyntaxError，整个 bundle 起不来。
+    本项目所有正则都要守这条 —— 所以这里用 match 捕获式切分。
+    拆句不是为了改文案，只是为了拿到可独立换行的片段：
+    此前整段是一个文本节点，393px 竖屏下被压成 87px 宽的竖缝（每行 3 个字）。 */
+const splitAdvice = (t) => (String(t == null ? '' : t).match(/[^，。；]+[，。；]?/g) || [])
+  .map((s) => s.trim()).filter(Boolean);
+
 function railRow(label, lo, hi, mid, pct, color, markVal, tickLabel) {
   if (!(hi > lo)) return '';
   const P = (v) => clampN(((v - lo) / (hi - lo)) * 100, 0, 100);
@@ -763,7 +772,13 @@ function renderChannel(ind) {
   z.style.background = hexA(v.color, .10);
   z.style.color = v.color;
   const ad = $('#chAdvice');
-  ad.textContent = v.advice;
+  /* 建议按句拆开渲染：窄屏每句独占一行 —— 「方向未选择；」这类关键句因此自然凸显；
+     宽屏则横向流式铺满整行，不留大片空白。
+     不拆时整段是一个文本节点，393px 竖屏会把它压成 87px 宽的竖缝（每行 3 个字）。 */
+  const adSegs = splitAdvice(v.advice);
+  ad.innerHTML = adSegs.length
+    ? adSegs.map((s) => `<span class="ad-seg">${esc(s)}</span>`).join('')
+    : esc(v.advice || '—');
   ad.style.borderLeftColor = v.color;
 
   const bi = ind.bollInfo, ra = ind.rails, dc = ind.donchian;

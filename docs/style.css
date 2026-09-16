@@ -246,12 +246,37 @@ table.data tbody tr:hover{background:#fafbfc}
 .report-body .badge{display:inline-block;background:var(--accent-bg);color:var(--accent);padding:1px 9px;border-radius:99px;font-size:11.5px}
 .report-body p{font-size:13px;margin:8px 0}
 
-/* 轨道研判 */
+/* 轨道研判 —— 整张卡片走「按可用宽度分栏」的横向布局，
+   而不是「小于某宽度就一律竖排」。实测：横屏手机 852px、平板 820px 本来放得下三列，
+   被一刀切压成一列后，每个格子 790px 宽里只有百来字，右侧约 590px 全是空白
+   （用户报的「内容挤在左、右边大片留白」）。 */
 .chapter-note{font-size:11px;font-weight:400;color:var(--muted)}
-.ch-zone-row{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;margin-bottom:12px}
-.ch-zone{font-size:17px;font-weight:700;padding:7px 16px;border-radius:10px;background:#f4f5f7;white-space:nowrap}
-.ch-advice{flex:1;min-width:280px;font-size:12.5px;color:var(--ink-2);background:#fafbfc;border-left:3px solid var(--line);border-radius:8px;padding:9px 13px;line-height:1.65}
-.channel-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:9px;margin-bottom:14px}
+/* 研判结论条：宽屏「徽章 + 建议」并排铺满整宽；窄屏建议独占整行。
+   原来是 flex+wrap，而移动端覆盖块里的 .ch-advice{min-width:0} 允许它缩到 min-content ——
+   393px 竖屏实测只剩 87px 宽 / 286px 高，一句观望建议被压成一条竖缝。 */
+.ch-zone-row{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px 14px;align-items:start;margin-bottom:12px}
+/* 「观望 / 中部位」这类结论必须一眼可见：前置圆点用 currentColor，自动跟随语义色。
+   width:max-content + justify-self:start 是必要的：单列网格下 grid item 会被 blockify
+   并拉满整行宽度，徽章会变成一条横幅而不是胶囊。 */
+.ch-zone{justify-self:start;width:max-content;display:inline-flex;align-items:center;gap:8px;font-size:17px;font-weight:700;padding:8px 16px;border-radius:10px;background:#f4f5f7;white-space:nowrap}
+.ch-zone::before{content:'';width:9px;height:9px;border-radius:50%;background:currentColor;flex:0 0 auto}
+.ch-advice{min-width:0;font-size:12.5px;color:var(--ink-2);background:#fafbfc;border-left:4px solid var(--line);border-radius:8px;padding:9px 13px;line-height:1.7}
+/* 建议由 app.js 按句拆开渲染：窄屏逐句成行（层次清晰、不再挤成竖缝），
+   宽屏横向流式铺满整行 —— 横向空间被真正用起来，右侧不留白。 */
+.ch-advice .ad-seg{display:block}
+@media (min-width:620px){
+  .ch-advice{display:flex;flex-wrap:wrap;align-items:baseline;gap:1px 16px}
+  .ch-advice .ad-seg{display:inline}
+}
+/* 窄屏必须退成单列：徽章是 nowrap 的 245px 宽，两列布局下留给建议的只剩几十像素，
+   建议会被压成一条竖缝（实测 393px 竖屏：宽 72px / 高 401px，每行 3 个字）。
+   单列后建议拿到整行宽度，逐句成行 —— 这才是「观望提示醒目易读」。 */
+@media (max-width:619px){
+  .ch-zone-row{grid-template-columns:minmax(0,1fr)}
+}
+/* 三块指标按可用宽度自适应列数。230px 是最小可读宽度：
+   393px 竖屏只排得下 1 列；852px 横屏、820px 平板、桌面都排 3 列。 */
+.channel-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:9px;margin-bottom:14px}
 .ch-item{background:#fafbfc;border:1px solid var(--line-2);border-radius:9px;padding:9px 11px}
 .ch-item h4{font-size:11.5px;color:var(--muted);font-weight:600;margin-bottom:5px}
 .ch-item .ch-vals{font-size:12.5px;font-variant-numeric:tabular-nums;line-height:1.7}
@@ -266,6 +291,11 @@ table.data tbody tr:hover{background:#fafbfc}
 .rv-val{font-variant-numeric:tabular-nums;font-weight:600;text-align:right}
 .rv-ticks{position:relative;height:14px;margin-top:-6px}
 .rv-tick{position:absolute;transform:translateX(-50%);font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+/* 首尾刻度改成贴边对齐。原来三个刻度统一 translateX(-50%)，
+   而 `left:100%` 那个会向右溢出一半字宽、撞进右侧数值列 ——
+   实测横屏下「15.49」与「区间 18.4%」直接叠在一起。 */
+.rv-ticks .rv-tick:first-child{transform:translateX(0)}
+.rv-ticks .rv-tick:last-child{transform:translateX(-100%)}
 
 /* 轨道数据不可用时的占位行：整行必须还在，只是改成"说明它为什么没有"。
    原因见 app.js railRowEmpty 的注释 —— 静默丢行会让用户以为本来就只有两条。 */
@@ -474,11 +504,16 @@ tr.mon-hit:has(.st-badge.bear) td:first-child{box-shadow:inset 3px 0 0 var(--dow
   .refresh-all,#refreshAll{display:none}
   .btn{border-radius:9px;font-size:12px;padding:6px 10px}
   .content,.sidebar{min-width:0}
-  .grid-2,.plan-grid,.profile-grid,.channel-grid{grid-template-columns:1fr !important}
+  /* .channel-grid 已从这条「一律一列」里摘出去：它现在按可用宽度自适应列数，
+     横屏手机（852px）与平板（820px）能排满 3 列。留在这一组里会被
+     !important 压死成一列 —— 那正是「右边大片留白」的来源。 */
+  .grid-2,.plan-grid,.profile-grid{grid-template-columns:1fr !important}
   .sh-stats{grid-template-columns:repeat(2,1fr) !important;gap:8px 14px}
   .verdict-main{flex-direction:column;align-items:flex-start;gap:14px}
-  .rv-row{grid-template-columns:88px 1fr 62px;gap:8px}
-  .ch-advice{min-width:0}
+  /* 数值列 62px 装不下「带内中上位置」这类 6 字标签（会折成两行、很难看）。
+     560~860px 这段（含 852px 横屏）横向宽度够，给到 84px。
+     比这更窄的走下面 @media (max-width:560px) 的两段式。 */
+  .rv-row{grid-template-columns:96px 1fr 84px;gap:8px}
   .wl-chg{flex:0 0 auto}
   .report-actions{flex-wrap:wrap;gap:6px}
 }
@@ -572,4 +607,27 @@ tr.mon-hit:has(.st-badge.bear) td:first-child{box-shadow:inset 3px 0 0 var(--dow
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .chart-card .chart-legend{ flex:1 1 auto; min-width:0; gap:6px 10px; font-size:10.5px; }
   .chart-card .chart-toggle{ flex:0 0 auto; margin-left:auto; }
+}
+
+/* ---------- 轨道卡片：窄屏把「标签 + 数值」提到同一行，轨道条占满整宽 ----------
+   三段式（标签 88px / 轨道 / 数值 62px）在 393px 竖屏下只给轨道留下 161px，
+   刻度 31.85 / 33.21 / 34.57 挤成一团，而标签列白白吃掉左侧四分之一宽度。
+   改成两行网格后轨道宽度约翻倍（331px），横向空间才真的被用上。 */
+@media (max-width:560px){
+  .rv-row{ grid-template-columns:minmax(0,1fr) auto;
+    grid-template-areas:'label val' 'track track'; gap:2px 10px; align-items:end; }
+  .rv-label{ grid-area:label; }
+  .rv-row > div:nth-child(2){ grid-area:track; }
+  .rv-val{ grid-area:val; text-align:right; }
+}
+
+/* ---------- 横屏（矮视口）刻意收紧纵向留白 ----------
+   852×393 这类横屏视口高度只有 393px，而卡片此前高 652px —— 要滚近两屏才看得完。
+   改成分栏后高度已明显下降，这里再把卡片内边距与行距收紧，尽量一屏读完。 */
+@media (orientation:landscape) and (max-height:560px){
+  .channel-card{ padding-top:11px; padding-bottom:11px; }
+  .channel-card .card-title{ margin-bottom:7px; }
+  .ch-zone-row{ margin-bottom:8px; }
+  .channel-grid{ margin-bottom:9px; }
+  .rail-viz{ gap:9px; padding:2px 2px 0; }
 }
