@@ -48,23 +48,31 @@
   function postWatchlist(payload) {
     const w = readStore();
     if (payload && payload.add) {
-      const code = norm(payload.add);
-      if (code && !w.codes.includes(code)) w.codes.push(code);
+      const n = source.normalize(payload.add);
+      if (n.market && !w.codes.includes(n.code)) w.codes.push(n.code);
     }
     if (payload && payload.remove) {
-      const code = norm(payload.remove);
+      const n = source.normalize(payload.remove);
+      const code = n.market ? n.code : null;
       w.codes = w.codes.filter((c) => c !== code);
     }
-    if (payload && Array.isArray(payload.codes)) w.codes = payload.codes.map(norm).filter(Boolean);
+    if (payload && Array.isArray(payload.codes)) {
+      w.codes = payload.codes.map((c) => source.normalize(c)).filter((n) => n.market).map((n) => n.code);
+    }
     if (!w.codes.length) w.codes = DEFAULT_CODES.slice();
     writeStore(w);
     return { ok: true, codes: w.codes, refreshSec: w.refreshSec || REFRESH_SEC };
   }
 
   async function makeReport(code) {
-    const data = await engine.analyze(code);
-    const md = report.buildReport(data);
-    return { ok: true, code: data.code, name: data.name, md, bodyHtml: report.mdToHtml(md), files: [] };
+    if (!code) return { ok: false, error: '缺少 code 参数' };
+    try {
+      const data = await engine.analyze(code);
+      const md = report.buildReport(data);
+      return { ok: true, code: data.code, name: data.name, md, bodyHtml: report.mdToHtml(md), files: [] };
+    } catch (e) {
+      return { ok: false, error: e.message || '分析失败' };
+    }
   }
 
   /* ---------------- 路由 ---------------- */
@@ -86,13 +94,14 @@
       case '/api/analyze': {
         const code = q.get('code');
         if (!code) return { ok: false, error: '缺少 code 参数' };
-        return { ok: true, data: await engine.analyze(code) };
+        try { return { ok: true, data: await engine.analyze(code) }; }
+        catch (e) { return { ok: false, error: e.message || '分析失败' }; }
       }
 
       case '/api/scan': {
         const codes = (q.get('codes') || readStore().codes.join(',')).split(',').filter(Boolean);
         const data = await Promise.all(codes.map(async (c) => {
-          try { return await engine.analyze(c); } catch (e) { return { code: c, error: e.message }; }
+          try { return await engine.analyze(c); } catch (_) { return { code: c, error: true }; }
         }));
         return { ok: true, data, ts: Date.now() };
       }

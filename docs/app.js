@@ -49,13 +49,13 @@ async function loadWatchlist() {
       const c = q.changePct;
       return `<div class="wl-item ${state.current === it.code ? 'active' : ''}" data-code="${it.code}">
         <div class="wl-row1">
-          <span class="wl-name">${it.name}
+          <span class="wl-name">${esc(it.name)}
             ${it.hasProfile ? '<span class="tag" style="font-size:10px">画像</span>' : ''}
           </span>
-          <button class="wl-del" data-del="${it.code}" title="移除">✕</button>
+          <button class="wl-del" data-del="${esc(it.code)}" title="移除">✕</button>
         </div>
         <div class="wl-row2">
-          <span class="wl-code">${it.code}</span>
+          <span class="wl-code">${esc(it.code)}</span>
           <span><span class="wl-price ${cls(c)}">${q.price != null ? fmt(q.price) : '—'}</span>
           <span class="wl-chg ${cls(c)}"> ${sign(c)}%</span></span>
         </div>
@@ -75,7 +75,7 @@ async function loadWatchlist() {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ remove: b.dataset.del })
         });
-        if (state.current === b.dataset.del) { state.current = null; $('#detail').hidden = true; $('#empty').hidden = false; }
+        if (state.current === b.dataset.del) { state.current = null; $('#detail').hidden = true; $('#empty').hidden = false; clearDiag(); }
         toast('已移除 ' + b.dataset.del);
         loadWatchlist();
       });
@@ -94,9 +94,9 @@ async function doSearch() {
   try {
     const r = await api('/api/search?q=' + encodeURIComponent(q));
     box.innerHTML = (r.rows || []).map((x) =>
-      `<div class="sr-item" data-code="${x.code}">
-         <span class="sr-name">${x.name}</span>
-         <span class="sr-meta">${x.code} · ${x.type || ''} <b style="color:var(--accent)">+ 添加</b></span>
+      `<div class="sr-item" data-code="${esc(x.code)}">
+         <span class="sr-name">${esc(x.name)}</span>
+         <span class="sr-meta">${esc(x.code)} · ${esc(x.type || '')} <b style="color:var(--accent)">+ 添加</b></span>
        </div>`).join('') || '<div class="empty-hint">未找到匹配标的</div>';
     box.querySelectorAll('.sr-item').forEach((el) => el.addEventListener('click', async () => {
       await api('/api/watchlist', {
@@ -186,6 +186,9 @@ function showDiag(err, code) {
   const box = $('#emptyDiag');
   if (!box) return false;
   box.hidden = false;
+  // 失败接管：隐藏正常占位与详情，只留诊断面板，避免两块同时可见
+  $('#empty').hidden = true;
+  $('#detail').hidden = true;
   box.innerHTML = `<div class="diag">
     <h3>⚠️ 分析失败 · 诊断面板</h3>
     <p class="diag-cause">${guessCause(err)}</p>
@@ -309,16 +312,17 @@ async function selectStock(code) {
   $('#empty').hidden = true;
   $('#detail').hidden = false;
   clearDiag();
+  const reqCode = code;
   try {
     const r = await api('/api/analyze?code=' + encodeURIComponent(code));
+    if (state.current !== reqCode) return;            // 已切到其它标的，丢弃过期响应，避免「点了A却显示B」
     if (!r.ok) throw new Error(r.error);
     state.data = r.data;
     renderDetail(r.data);
   } catch (e) {
-    $('#detail').hidden = true;
+    if (state.current !== reqCode) return;            // 已切换，不再弹诊断覆盖新标的
     toast('分析失败：' + e.message);
-    // 诊断面板自己会说明原因，比干瘪的「选择标的」占位有用得多
-    $('#empty').hidden = showDiag(e, code);
+    showDiag(e, code);                                 // showDiag 负责隐藏 empty/detail，由诊断面板接管
     console.error(e);
   }
 }
@@ -536,14 +540,14 @@ function renderSignals() {
     <div class="sig ${s.side}">
       <div class="sig-head">
         <span class="sig-side ${s.side}">${s.side === 'bull' ? '利好' : s.side === 'bear' ? '利空' : '中性'}</span>
-        <span class="sig-name">${s.name}</span>
-        <span class="sig-dim">${s.dim}</span>
+        <span class="sig-name">${esc(s.name)}</span>
+        <span class="sig-dim">${esc(s.dim)}</span>
         <span class="sig-stars">${'★'.repeat(Math.max(1, Math.min(5, Math.round(s.strength))))}</span>
         <span class="sig-dim">权重 ${s.weight}</span>
         ${s.origin === 'profile' ? '<span class="tag" style="font-size:10px">画像规则</span>' : ''}
       </div>
-      <div class="sig-text">${s.text}</div>
-      <div class="sig-evi">📊 ${s.evidence}</div>
+      <div class="sig-text">${esc(s.text)}</div>
+      <div class="sig-evi">📊 ${esc(s.evidence)}</div>
     </div>`).join('') || '<div class="hint">暂无该类信号</div>';
 }
 
@@ -904,12 +908,13 @@ function startStream() {
     if (!$('#autoRefresh').checked) return;
     if (document.hidden) return;
     await loadWatchlist();
-    if (state.current) {
-      try {
-        const r = await api('/api/analyze?code=' + encodeURIComponent(state.current));
-        if (r.ok) { state.data = r.data; renderDetail(r.data); }
-      } catch (_) {}
-    }
+    const cur = state.current;
+    if (!cur) return;
+    try {
+      const r = await api('/api/analyze?code=' + encodeURIComponent(cur));
+      if (state.current !== cur) return;            // 刷新期间用户已切换标的，丢弃旧响应
+      if (r.ok) { state.data = r.data; renderDetail(r.data); }
+    } catch (_) {}
   }, state.refreshSec * 1000);
 }
 
@@ -944,7 +949,7 @@ $('#genReport').addEventListener('click', genReport);
 $('#refreshAll').addEventListener('click', async () => {
   await loadWatchlist();
   if (state.current) selectStock(state.current);
-  toast('已刷新');
+  else toast('已刷新');
 });
 $('#downloadMd').addEventListener('click', () => {
   if (!state.report) return;

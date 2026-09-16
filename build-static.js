@@ -13,9 +13,15 @@ const ROOT = __dirname;
 const PUB = path.join(ROOT, 'public');
 const OUT = path.join(ROOT, 'docs');
 
-/** 打包顺序即依赖顺序；config 必须最先（凭据入口） */
+/**
+ * 打包清单（顺序仅影响末尾 window.SentryLib 的求值顺序，模块本身是惰性 __define）。
+ *
+ * 注意这里**没有** lib/config.js：它是凭据入口，只有 Node 侧（server.js）需要。
+ * 浏览器侧对它的唯一引用在 lib/source.js 的 @node-only 区块里（读 EASTMONEY_TOKEN），
+ * 打包时会被整段剥离，因此公开产物里不存在任何读凭据的代码。
+ * 一旦有浏览器侧代码 require('config')，构建期的「模块引用闸门」会直接报错。
+ */
 const MODULES = [
-  ['config', 'lib/config.js'],
   ['source', 'lib/source.js'],
   ['tech', 'lib/tech.js'],
   ['monitors', 'lib/monitors.js'],
@@ -50,7 +56,8 @@ function wrapModule(name, relFile) {
     .replace(/require\((['"])\.\/([a-zA-Z0-9_-]+)\1\)/g, "require('$2')")
     .replace(/require\((['"])\.\.\/data\/profiles\.json\1\)/g, "require('profiles')");
 
-  const leftovers = code.match(/require\((['"])\.{1,2}\//g);
+  // 同时覆盖模板字符串写法 require(`./x`)（反引号），否则会漏进浏览器产物
+  const leftovers = code.match(/require\(\s*['"\`](\.{1,2}\/)/g);
   if (leftovers) throw new Error(`${relFile} 仍存在未处理的相对 require：${leftovers.join(', ')}`);
 
   return `/* ===== ${relFile} ===== */\n__define('${name}', function (module, exports, require) {\n${code}\n});`;
@@ -59,8 +66,14 @@ function wrapModule(name, relFile) {
 function build() {
   fs.mkdirSync(OUT, { recursive: true });
 
-  const profiles = fs.readFileSync(path.join(ROOT, 'data', 'profiles.json'), 'utf8');
-  JSON.parse(profiles); // 提前校验 JSON 合法性
+  const profilesObj = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'profiles.json'), 'utf8'));
+  /**
+   * 不能把 JSON 原文直接嵌进 <script>：只要画像数据里出现 `</script>`，
+   * 浏览器就会提前闭合脚本标签，整段 bundle 被截断（注入面）。
+   * 统一重新序列化并把 "<" 转义为 \u003c —— 在 JS/JSON 字符串里完全等价，
+   * 但源码里再也不会出现字面量 `<`。
+   */
+  const profiles = JSON.stringify(profilesObj).replace(/</g, '\\u003c');
 
   const bundle = `/*! StockSentry 静态运行时 —— 由 build-static.js 自动生成，请勿手工编辑。源码见 lib/ */
 (function () {
@@ -87,7 +100,6 @@ var PROFILES_DATA = ${profiles};
 ${MODULES.map(([n, f]) => wrapModule(n, f)).join('\n\n')}
 
 window.SentryLib = {
-  config: __require('config'),
   source: __require('source'),
   tech: __require('tech'),
   monitors: __require('monitors'),
@@ -108,16 +120,28 @@ window.SentryLib = {
   fs.copyFileSync(path.join(PUB, 'app.js'), path.join(OUT, 'app.js'));
   fs.copyFileSync(path.join(ROOT, 'static-api.js'), path.join(OUT, 'static-api.js'));
 
-  // 注入静态版脚本
+  // 注入静态版脚本。标记必须「有且只有一个」：静默 replace 首个匹配太脆弱 ——
+  // 一旦 HTML 里出现第二个 app.js 引用，就会漏掉一个没被包进静态运行时的脚本。
   const html = fs.readFileSync(path.join(PUB, 'index.html'), 'utf8');
   const marker = '<script src="app.js"></script>';
-  if (!html.includes(marker)) throw new Error('public/index.html 中未找到 app.js 引入标记');
+  const markerCount = html.split(marker).length - 1;
+  if (markerCount !== 1) {
+    throw new Error(`public/index.html 中 app.js 引入标记应恰好 1 处，实际 ${markerCount} 处`);
+  }
   const staticHtml = html.replace(marker, [
     '<script>window.__SENTRY_STATIC__ = true;</script>',
     '<script src="bundle.js"></script>',
     '<script src="static-api.js"></script>',
     '<script src="app.js"></script>'
   ].join('\n'));
+  // 载入顺序是硬约束：bundle.js 提供 window.SentryLib，static-api.js 依赖它注册
+  // window.SentryStatic，app.js 再通过 SentryStatic 取数。顺序错了会静默退化。
+  const oBundle = staticHtml.indexOf('src="bundle.js"');
+  const oApi = staticHtml.indexOf('src="static-api.js"');
+  const oApp = staticHtml.indexOf('src="app.js"');
+  if (!(oBundle >= 0 && oBundle < oApi && oApi < oApp)) {
+    throw new Error('docs/index.html 脚本顺序错误，应为 bundle.js → static-api.js → app.js');
+  }
 
   fs.writeFileSync(path.join(OUT, 'index.html'), staticHtml, 'utf8');
   fs.writeFileSync(path.join(OUT, '.nojekyll'), '', 'utf8');
@@ -142,13 +166,40 @@ window.SentryLib = {
   }
 
   const bundleSrc = fs.readFileSync(path.join(OUT, 'bundle.js'), 'utf8');
-  if (/process\.env/.test(bundleSrc)) throw new Error('bundle.js 中仍存在 process.env，请检查 @node-only 标记');
-  if (/require\((['"])\.{1,2}\//.test(bundleSrc)) throw new Error('bundle.js 中仍存在相对 require');
+  // 同时覆盖 process['env'] / process["env"] 这类括号访问写法，否则会漏过闸门
+  if (/process\s*\.\s*env\b|process\s*\[\s*['"]\s*env\s*['"]\s*\]/.test(bundleSrc))
+    throw new Error('bundle.js 中仍存在 process.env（含 process[\'env\'] 变体），请检查 @node-only 标记');
+  if (/require\(\s*['"\`](\.{1,2}\/)/.test(bundleSrc)) throw new Error('bundle.js 中仍存在相对 require（含模板字符串写法）');
+
+  /* ---------------------------------------------------------------- */
+  /* 模块引用闸门：__require 找不到名字只会在浏览器里抛「模块未找到」，   */
+  /* 那是运行期才暴露。改名/删模块后忘记同步时最容易踩，这里提前拦下。   */
+  /* ---------------------------------------------------------------- */
+  const known = new Set(MODULES.map(([n]) => n));
+  known.add('profiles');                       // 由 profiles.json 直接注入的特殊模块
+  const missing = new Set();
+  const refRe = /(?:__)?require\(\s*['"]([^'"]+)['"]\s*\)/g;
+  let rm;
+  while ((rm = refRe.exec(bundleSrc))) {
+    if (!known.has(rm[1])) missing.add(rm[1]);
+  }
+  if (missing.size) {
+    throw new Error(`bundle.js 引用了未打包的模块：${[...missing].join(', ')}（请同步 build-static.js 的 MODULES）`);
+  }
+
+  /* 产物完整性：写出去的每个文件都必须存在且非空 */
+  const ARTIFACTS = ['index.html', 'bundle.js', 'static-api.js', 'app.js', 'style.css'];
+  for (const f of ARTIFACTS) {
+    const abs = path.join(OUT, f);
+    if (!fs.existsSync(abs) || fs.statSync(abs).size === 0) {
+      throw new Error(`产物缺失或为空：docs/${f}`);
+    }
+  }
 
   const size = (f) => (fs.statSync(path.join(OUT, f)).size / 1024).toFixed(1) + ' KB';
   console.log('\n静态版构建完成 → docs/');
-  ['index.html', 'bundle.js', 'static-api.js', 'app.js', 'style.css'].forEach((f) =>
-    console.log(`  ${f.padEnd(16)} ${size(f)}`));
+  ARTIFACTS.forEach((f) => console.log(`  ${f.padEnd(16)} ${size(f)}`));
+  console.log(`  ${'模块引用'.padEnd(14)} ✅ 通过（${MODULES.length} 个模块，无悬空引用）`);
   console.log(`  ${'密钥扫描'.padEnd(14)} ✅ 通过（0 处凭据）`);
 }
 
