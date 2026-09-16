@@ -175,6 +175,67 @@ window.SentryLib = {
   }
 
   /* ---------------------------------------------------------------- */
+  /* 单文件版：把 CSS / bundle / static-api / app 全部内联进一个 HTML     */
+  /* ---------------------------------------------------------------- */
+  /**
+   * 为什么还要这个：多文件部署在「网络对静态资源不稳」的环境里会碎掉 ——
+   * 典型就是国内访问 GitHub Pages，HTML 能出来但 155KB 的 bundle.js 超时，
+   * 结果 window.SentryLib 为空、整页报"分析失败"。资源越多，越容易被逐个打断。
+   *
+   * 单文件只有 1 次请求，没有资源依赖、没有缓存版本错配，还能直接当附件发给别人
+   * （微信 / AirDrop / 邮件）。用 file:// 打开时 fetch 会被浏览器禁止，
+   * 但 lib/source.js 的 JSONP 兜底走 <script> 标签，不受该限制 —— 正好互补。
+   */
+  const inline = (code) => code.replace(/<\/script/gi, '<\\/script');   // 防止提前闭合脚本标签
+
+  /**
+   * 内联必须用「函数式替换」，绝不能用模板字符串当替换值。
+   *
+   * 踩过的坑：String.prototype.replace 会在**替换串**里解释 `$$`→`$`、`$&`、`$'`、
+   * `` $` ``、`$1` 等特殊序列。源码里 `const $$ = (s) => Array.from(...)` 被当成替换值
+   * 内联后塌缩成 `const $ = ...`，与上一行 `const $` 重复声明 → 整页 SyntaxError →
+   * 白屏「分析失败」。这类 bug 静默、且只在单文件版出现，用 replacer 函数即根除。
+   */
+  const raw = (f) => fs.readFileSync(path.join(OUT, f), 'utf8');
+  const assets = [
+    // [待替换的位置, 原始内容, 内联进页面的文本]
+    ['style.css', /<link[^>]*style\.css[^>]*>/, raw('style.css'), (c) => `<style>\n${c}\n</style>`],
+    ['bundle.js', /<script src="bundle\.js[^"]*"><\/script>/, raw('bundle.js'), (c) => `<script>\n${inline(c)}\n</script>`],
+    ['static-api.js', /<script src="static-api\.js[^"]*"><\/script>/, raw('static-api.js'), (c) => `<script>\n${inline(c)}\n</script>`],
+    ['app.js', /<script src="app\.js[^"]*"><\/script>/, raw('app.js'), (c) => `<script>\n${inline(c)}\n</script>`]
+  ];
+
+  let standalone = versionedHtml;
+  for (const [name, re, from] of assets) {
+    if (!re.test(standalone)) throw new Error(`单文件内联失败：HTML 中找不到 ${name} 的引用位置`);
+    standalone = standalone.replace(re, () => assets.find((a) => a[0] === name)[3](from));
+  }
+
+  /**
+   * 内联保真闸门：逐字节确认每个源文件的内联结果确实出现在产物里。
+   * 只要再有 `$` 特殊序列被吞、或 `</script` 转义漏做，这里立刻构建失败，
+   * 而不是等到用户手机上白屏才发现。
+   */
+  for (const [name, , from, render] of assets) {
+    if (!standalone.includes(render(from))) {
+      throw new Error(`单文件内联内容与 docs/${name} 不一致（疑似 $ 特殊序列被吞或转义异常），构建中止`);
+    }
+  }
+
+  for (const token of ['src="bundle.js', 'src="static-api.js', 'src="app.js', 'href="style.css']) {
+    if (standalone.includes(token)) throw new Error(`单文件版仍存在外部引用：${token}`);
+  }
+  const standalonePath = path.join(ROOT, 'out', 'stock-sentry-standalone.html');
+  fs.mkdirSync(path.dirname(standalonePath), { recursive: true });
+  fs.writeFileSync(standalonePath, standalone, 'utf8');
+  // 单文件同样是公开产物，必须过同一套凭据闸门（只扫这一个文件，避免误伤 out/ 里的历史文件）
+  const saFindings = scanPath(standalonePath).filter((f) => f.sev === 'error');
+  if (saFindings.length) {
+    console.error('❌ 单文件版中发现疑似凭据：', saFindings.map((f) => `${f.line} → ${f.preview}`).join(', '));
+    process.exit(1);
+  }
+
+  /* ---------------------------------------------------------------- */
   /* 防泄漏闸门：产物是要公开发布的，必须逐字节扫描，命中即中止构建      */
   /* ---------------------------------------------------------------- */
   const findings = scanPath(OUT);
@@ -227,6 +288,7 @@ window.SentryLib = {
   const size = (f) => (fs.statSync(path.join(OUT, f)).size / 1024).toFixed(1) + ' KB';
   console.log('\n静态版构建完成 → docs/');
   ARTIFACTS.forEach((f) => console.log(`  ${f.padEnd(16)} ${size(f)}`));
+  console.log(`  ${'单文件版'.padEnd(14)} ${(fs.statSync(standalonePath).size / 1024).toFixed(1)} KB  → out/stock-sentry-standalone.html`);
   console.log(`  ${'模块引用'.padEnd(14)} ✅ 通过（${MODULES.length} 个模块，无悬空引用）`);
   console.log(`  ${'密钥扫描'.padEnd(14)} ✅ 通过（0 处凭据）`);
 }
