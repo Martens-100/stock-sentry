@@ -20,6 +20,10 @@
  *     改为验证交付用的单文件版 out/stock-sentry-standalone.html（用 file:// 打开）。
  *     这一份才是「当附件发给别人」的形态：file:// 下 fetch 会被浏览器禁止，
  *     取数只能靠 JSONP 兜底 —— 所以它是唯一能证明「离线单文件也能用」的姿势。
+ *   NODE_PATH=... node scripts/verify-planE-webkit.js https://xxx.example.com/
+ *     传一个 http(s) 地址：直接对**已部署的线上站点**跑同一套断言。
+ *     这一步不能省 —— 本地绿只证明「源码是对的」，线上绿才证明「发出去的那份是对的」
+ *     （构建产物、CDN、指纹、路径前缀，任何一环都能让两边行为不同）。
  *
  * 截图输出到 _shots/planE-*.png（_shots 与 out/ 都在 .gitignore 里，不入库）。
  */
@@ -34,7 +38,9 @@ const SHOTS = path.join(ROOT, '_shots');
 const BLOCK_FETCH = process.argv.includes('--block-fetch');
 const HEADED = process.argv.includes('--headed');
 const STANDALONE = process.argv.includes('--standalone');
-const SHOT = STANDALONE ? 'planE-standalone-' : 'planE-';
+/** 第一个非 --flag 参数：给了就当作线上地址，直接验部署产物 */
+const REMOTE_URL = process.argv.slice(2).find((a) => /^https?:\/\//.test(a)) || null;
+const SHOT = REMOTE_URL ? 'planE-live-' : STANDALONE ? 'planE-standalone-' : 'planE-';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8',
@@ -96,7 +102,10 @@ const swipeScript = (dir) => `(() => {
 
   let srv = null;
   let URL;
-  if (STANDALONE) {
+  if (REMOTE_URL) {
+    URL = REMOTE_URL;
+    console.log(`\n线上站点（验部署产物，不是本地源码）：${URL}`);
+  } else if (STANDALONE) {
     const file = path.join(ROOT, 'out', 'stock-sentry-standalone.html');
     if (!fs.existsSync(file)) { console.error('单文件版不存在，请先运行 node build-static.js'); process.exit(1); }
     URL = 'file://' + file;
