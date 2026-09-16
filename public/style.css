@@ -278,6 +278,11 @@ table.data tbody tr:hover{background:#fafbfc}
 .src-badge.generic{background:#fff6e8;color:#a86504;border:1px solid #f2ddb8}
 .mon-now{font-size:12px;color:var(--muted);min-width:150px}
 .mon-note{margin-top:4px;line-height:1.55;color:var(--ink-2);font-size:11.5px}
+/* 监控清单是 7 列表格（维度 / 指标 / 窗口 / 利好 / 利空 / 状态 / 权重），
+   手机上它的最小内容宽度必然超过屏宽。不给自己的横向滚动容器，
+   它就会把整个文档撑宽 —— 表现为「页面能左右晃」，而且所有卡片都被拖着一起晃。
+   实测修前 document.scrollWidth 515 vs 视口 393。 */
+#monitorTableWrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
 
 /* 清单项状态徽标 */
 .st-badge{
@@ -317,3 +322,221 @@ tr.mon-hit:has(.st-badge.bear) td:first-child{box-shadow:inset 3px 0 0 var(--dow
   opacity:0;pointer-events:none;transition:.25s;z-index:99;
 }
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* 移动端专用 / 桌面专用：靠 CSS 切显隐，JS 只渲染一份结构，避免按视口分支渲染 */
+.m-only{display:none}
+
+/* ==========================================================================
+   方案 E · 顶部胶囊（切换）+ 内容横滑换股 + 底部全屏清单（管理）
+   --------------------------------------------------------------------------
+   职责分离：胶囊条只做「切换」，底部全屏清单只做「管理」（排序 / 搜索 / 删除 / 添加）。
+   顺带修掉四个平台问题：
+     ① 触屏删除按钮（横滑期误触 + 与手势打架）→ 删除收进全屏清单
+     ② 100dvh（iOS 动态工具栏下 100vh 会算高，导致底部被裁）
+     ③ 输入框字号 >=16px（否则 iOS 聚焦时整页放大）
+     ④ 图表可折叠（K 线 380px 在手机上把详情顶到很远）
+   另补 iPhone 底部安全区 env(safe-area-inset-bottom)。
+   ========================================================================== */
+
+/* ---------- 全局：新组件 ---------- */
+
+/* 图表可折叠。
+   展开高度按卡片用 --chart-h 声明：原型里写死 240px，但本项目 K 线画布高 380px，
+   沿用 240 会把 K 线裁掉一截。
+   默认态做成「CSS 优先」：桌面默认展开（JS 没跑完也不会闪一下空白），
+   手机默认折叠（进页面就能看到详情正文，不被 380px 的 K 线挤下去）。
+   ——折叠态用 .collapsed，展开态在手机上用 .open，两者由 JS 按视口宽度切换。 */
+.chart-body{ max-height:var(--chart-h,240px); overflow:hidden; transition:max-height .26s ease; }
+.chart-card.collapsed .chart-body{ max-height:0; }
+/* 每张图的展开高度：分时画布 220px；K线画布 380px + 上方三个开关约 30px */
+.chart-minute{ --chart-h:240px; }
+.chart-kline{ --chart-h:430px; }
+.chart-card .card-title{ display:flex; align-items:center; gap:10px; }
+.chart-toggle{ margin-left:auto; display:inline-flex; align-items:center; gap:4px;
+  border:1px solid var(--line); background:#fff; color:var(--muted);
+  border-radius:99px; font-size:11.5px; padding:4px 11px; cursor:pointer;
+  font-family:inherit; white-space:nowrap; }
+.chart-toggle svg{ transition:transform .2s ease; }
+/* 箭头方向跟随展开状态；两种形态的「展开」判定不同，所以各自放在对应断点里 */
+@media (min-width:861px){
+  .chart-card:not(.collapsed) .chart-toggle svg{ transform:rotate(180deg); }
+}
+@media (max-width:860px){
+  .chart-body{ max-height:0; }
+  .chart-card.open .chart-body{ max-height:var(--chart-h,240px); }
+  .chart-card.open .chart-toggle svg{ transform:rotate(180deg); }
+}
+
+/* 胶囊条末尾的「清单」入口（移动端专用，桌面隐藏） */
+.chip-all{ display:none; }
+
+/* ---------- 底部全屏自选清单（管理态） ---------- */
+.as-mask{ position:fixed; inset:0; background:rgba(16,24,40,.34); z-index:89;
+  opacity:0; pointer-events:none; transition:opacity .26s ease; }
+.as-mask.open{ opacity:1; pointer-events:auto; }
+
+.as-panel{ position:fixed; left:0; right:0; bottom:0; z-index:90; background:#fff;
+  height:92vh; height:92dvh; display:flex; flex-direction:column;
+  border-radius:18px 18px 0 0; box-shadow:0 -10px 34px rgba(16,24,40,.18);
+  transform:translateY(101%); transition:transform .26s ease; }
+.as-panel.open{ transform:translateY(0); }
+
+.as-grip{ flex:0 0 22px; height:22px; display:flex; align-items:center; justify-content:center; }
+.as-grip i{ width:40px; height:4px; border-radius:99px; background:#d3d1c7; display:block; }
+
+.as-head{ display:flex; align-items:center; gap:10px; padding:2px 14px 10px; }
+.as-head h3{ margin:0; font-size:16px; }
+.as-head .as-cnt{ font-size:11.5px; color:var(--muted); }
+.as-x{ margin-left:auto; width:44px; height:44px; border:0; background:none; color:var(--muted);
+  display:flex; align-items:center; justify-content:center; cursor:pointer; border-radius:10px; font:inherit; }
+.as-x:active{ background:#f4f5f7; }
+
+.as-tools{ padding:0 12px 8px; display:flex; flex-direction:column; gap:8px; }
+.as-tools input{ width:100%; box-sizing:border-box; border:1px solid var(--line);
+  border-radius:9px; padding:10px 12px; font-size:16px; background:#fbfbfc;
+  color:var(--ink); outline:none; font-family:inherit; }
+.as-tools input:focus{ border-color:#c9d4ee; }
+
+.sorts{ display:flex; gap:6px; overflow-x:auto; padding-bottom:2px; -webkit-overflow-scrolling:touch; }
+.sorts button{ flex:0 0 auto; border:1px solid var(--line); background:#fff; color:var(--muted);
+  border-radius:99px; font-size:12px; padding:7px 13px; cursor:pointer; font-family:inherit; }
+.sorts button.active{ background:var(--accent-bg); border-color:#d5ddf2; color:var(--accent); font-weight:600; }
+
+.as-list{ flex:1; min-height:0; overflow:auto; padding:4px 12px 12px; -webkit-overflow-scrolling:touch; }
+.as-empty{ text-align:center; color:var(--muted); font-size:12.5px; padding:34px 0; }
+/* 按名称/拼音搜索时的提示行（手机端没有桌面那块搜索框，由这里接管） */
+.as-note{ display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); padding:0 2px 8px; }
+.as-note button{ margin-left:auto; border:1px solid var(--line); background:#fff; color:var(--muted);
+  border-radius:99px; padding:4px 10px; font-size:11.5px; cursor:pointer; font-family:inherit; }
+
+.al-row{ display:flex; align-items:center; gap:10px; border:1px solid var(--line);
+  border-radius:11px; padding:10px 11px; margin-bottom:8px; background:#fff; }
+.al-row.active{ border-color:#d5ddf2; background:var(--accent-bg); }
+.al-main{ flex:1; min-width:0; cursor:pointer; }
+.al-t1{ display:flex; align-items:baseline; gap:8px; }
+.al-nm{ font-weight:600; font-size:14.5px; }
+.al-cd{ font-size:11.5px; color:var(--muted); font-family:ui-monospace,Menlo,monospace; }
+.al-t2{ display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:5px; font-size:12.5px; }
+.al-sc{ font-variant-numeric:tabular-nums; color:var(--muted); }
+.al-chg{ font-variant-numeric:tabular-nums; font-weight:600; }
+.al-chg.up{ color:var(--up); }
+.al-chg.down{ color:var(--down); }
+.al-side{ font-size:11px; font-weight:600; padding:1px 8px; border-radius:99px;
+  background:#f4f5f7; color:var(--muted); }
+.al-side.bull{ background:var(--up-bg); color:var(--up); }
+.al-side.bear{ background:var(--down-bg); color:var(--down); }
+.al-add{ flex:0 0 auto; border:1px solid #d5ddf2; background:var(--accent-bg); color:var(--accent);
+  border-radius:9px; padding:8px 12px; font-size:12px; font-weight:600; cursor:pointer; font-family:inherit; }
+.al-del{ flex:0 0 auto; width:44px; height:44px; border:1px solid var(--line); background:#fff;
+  border-radius:10px; color:var(--muted); cursor:pointer;
+  display:flex; align-items:center; justify-content:center; }
+.al-del:active{ background:#fdf2f1; border-color:#f2c6c2; color:var(--down); }
+
+.as-add{ display:flex; gap:8px; padding:10px 12px; border-top:1px solid var(--line-2);
+  padding-bottom:calc(10px + env(safe-area-inset-bottom, 0px)); }
+.as-add input{ flex:1; min-width:0; border:1px solid var(--line); border-radius:9px;
+  padding:11px 12px; font-size:16px; background:#fbfbfc; color:var(--ink);
+  outline:none; font-family:inherit; }
+
+/* ---------- 移动端基础布局：侧栏 → 顶部吸顶胶囊条 ----------
+   顺序是硬约束：这两段是「基础移动布局」，方案 E 的移动端覆盖块必须排在它们之后。
+   同为 (max-width:860px) 且特异度相同时，CSS 按下标决胜 ——
+   基础块里的 .wl-item{flex:0 0 132px} / .content{padding:12px 12px 48px}
+   必须让位给方案 E 的 136px 胶囊与带安全区的内边距。顺序反了就会静默丢掉这些修正。 */
+@media (max-width:860px){
+  .topbar{position:static;height:auto;padding:8px 12px;gap:8px;flex-wrap:nowrap}
+  .brand p{display:none}
+  .brand h1{font-size:15px}
+  .topbar-right{gap:8px;margin-left:auto;flex-wrap:nowrap}
+  .clock span{font-size:13px}
+  .switch span{font-size:11.5px}
+  /* 原型用的是 .refresh-all 类，本项目是 #refreshAll 这个 id，两个都写上 */
+  .refresh-all,#refreshAll{display:none}
+  .btn{border-radius:9px;font-size:12px;padding:6px 10px}
+  .content,.sidebar{min-width:0}
+  .grid-2,.plan-grid,.profile-grid,.channel-grid{grid-template-columns:1fr !important}
+  .sh-stats{grid-template-columns:repeat(2,1fr) !important;gap:8px 14px}
+  .verdict-main{flex-direction:column;align-items:flex-start;gap:14px}
+  .rv-row{grid-template-columns:88px 1fr 62px;gap:8px}
+  .ch-advice{min-width:0}
+  .wl-chg{flex:0 0 auto}
+  .report-actions{flex-wrap:wrap;gap:6px}
+}
+
+@media (max-width:860px){
+  .layout{display:block;height:auto;overflow:visible}
+  .sidebar{width:auto;border-right:0;background:#fff;border-bottom:1px solid var(--line);
+    position:sticky;top:0;z-index:40;display:block;padding:8px 10px 6px}
+  .side-block{margin:0}
+  .side-block.grow{margin:0;overflow:visible}
+  .side-title{display:none}
+  .add-block{display:none}
+  #searchResults{display:none}
+  .search-row{margin-bottom:0}
+  .watchlist{flex-direction:row;overflow-x:auto;gap:8px;padding-bottom:2px}
+  .wl-item{flex:0 0 132px;padding:7px 9px;border-left:0;border-radius:9px;
+    border-bottom:2px solid transparent}
+  .wl-item.active{border-bottom-color:var(--accent);background:var(--accent-bg);border-color:#e5e7eb}
+  .wl-del{opacity:1;font-size:11px;border:1px solid var(--line);border-radius:5px;padding:0 5px}
+  .wl-row2{justify-content:space-between;align-items:center}
+  .content{overflow:visible;padding:12px 12px 48px}
+}
+
+/* ---------- 桌面（>=861px） ---------- */
+@media (min-width:861px){
+  /* 平台修复 ①：改用 100dvh，避免 iOS 动态工具栏下算高 */
+  .layout{ height:calc(100vh - 60px); height:calc(100dvh - 60px); }
+  /* 全屏清单是移动端的管理态；桌面沿用侧栏 hover 删除，固定层必须彻底隐藏 */
+  .as-panel,.as-mask,.chip-all{ display:none !important; }
+}
+
+/* ---------- 移动端（<=860px）覆盖：方案 E 的核心几何 ----------
+   必须排在「基础移动布局」两段之后（同为 max-width:860px，靠下标决胜）。 */
+@media (max-width:860px){
+
+  /* 平台修复 ②：输入框字号 >=16px，避免 iOS 聚焦时整页放大 */
+  .search-row input{ font-size:16px; }
+  /* 平台修复 ③：底部安全区（iPhone 手势条） */
+  .content{ padding:12px 12px calc(46px + env(safe-area-inset-bottom, 0px)); }
+  .watchlist{ padding-bottom:2px; }
+  /* 平台修复 ④：触控目标不小于 44px */
+  .btn{ min-height:44px; }
+  .tab{ min-height:40px; padding:9px 12px; }
+  .chip-all{ min-height:64px; }
+
+  /* 胶囊 = 纯切换入口：加大、加高、显示评分（本产品核心信息） */
+  .watchlist{ gap:9px; scroll-snap-type:x proximity; -webkit-overflow-scrolling:touch; }
+  /* 宽度必须显式钉死，不能只给 flex-basis。
+     实测：只写 flex:0 0 136px 时，Safari 会按 .wl-item 的 min-width:auto
+     （= 内容最小尺寸）把它撑到 163px —— flex-shrink 已是 0，压不回去，
+     于是胶囊比设计宽 27px，一屏少显示近半只标的。宽度 + min-width:0 + max-width
+     三者一起给，才真正等于「136px，且不许被内容左右」。 */
+  .wl-item{ flex:0 0 136px; width:136px; min-width:0; max-width:136px;
+    min-height:64px; padding:9px 11px; scroll-snap-align:start;
+    display:flex; flex-direction:column; justify-content:center; gap:3px; cursor:pointer; }
+  .wl-item.active{ border-color:#d5ddf2; background:var(--accent-bg); border-bottom-color:var(--accent); }
+  .wl-row1,.wl-row2{ min-width:0; }
+  .wl-row1{ gap:6px; }
+  .wl-name{ font-size:13.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1 1 auto; min-width:0; }
+  .wl-chg{ font-size:12.5px; }
+  .wl-row2{ justify-content:flex-start; gap:7px; margin-top:0; align-items:center; }
+  .wl-code{ font-size:11px; }
+  /* 把评分放回胶囊：只看一眼就能判断该不该点进去 */
+  .wl-score{ display:inline-block; font-size:11px; color:var(--muted);
+    background:#f4f5f7; border-radius:99px; padding:1px 7px; white-space:nowrap; }
+  /* 关键改动：删除按钮不再放在胶囊上（触屏易误触 + 与横滑手势打架），
+     删除统一收进「清单」管理态 */
+  .wl-del{ display:none !important; }
+
+  /* 「清单」固定在胶囊条右端：无论横滑到哪儿都点得到 */
+  .chip-all{ flex:0 0 74px; position:sticky; right:0; z-index:2;
+    border:1px solid #d5ddf2; background:var(--accent-bg);
+    border-radius:11px; color:var(--accent); font-size:12px; font-weight:600; gap:2px;
+    align-items:center; justify-content:center; cursor:pointer;
+    box-shadow:-10px 0 10px -4px #fff, -5px 0 6px -2px #fff;
+    display:flex; flex-direction:column; line-height:1.25; font-family:inherit; }
+
+  /* 移动端专用显隐 */
+  .m-only{ display:inline-block !important; }
+  .d-only,.wl-q{ display:none !important; }
+}

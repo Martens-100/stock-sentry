@@ -15,7 +15,39 @@ const sign = (x, d = 2) => (x == null ? '—' : `${x > 0 ? '+' : ''}${Number(x).
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-const state = { codes: [], current: null, data: null, timer: null, tab: 'bull', refreshSec: 8, report: null };
+/* ---------- 图标：胶囊与全屏清单里的矢量图标 ----------
+   不用 emoji/字体符号：各家系统的字形差异很大，而这里每个图标都要承担「按钮」职责，
+   形状不一致会直接造成误点。 */
+const ICON = {
+  plus: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  chev: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+  trash: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9.5 7V4.8h5V7M6.6 7l.9 12.2h9l.9-12.2M10.2 11v5M13.8 11v5"/></svg>'
+};
+
+/* 操作结论 → 方向。全屏清单里每行要有一个方向徽标，
+   实时数据没有原型里那句静态信号名（"均线多头"），用系统自己的 action.key 派生最诚实：
+   它本来就是这一个标的的结论，比编一个标签可信。 */
+const SIDE_BY_ACTION = {
+  BUY: 'bull', ADD: 'bull', HOLD: 'neutral', WATCH: 'neutral',
+  REDUCE: 'bear', EXIT: 'bear', AVOID: 'bear', TAKE_PROFIT: 'neutral', NOCHASE: 'neutral'
+};
+
+const state = {
+  /* ---- 原有 ---- */
+  codes: [], current: null, data: null, timer: null, tab: 'bull', refreshSec: 8, report: null,
+  /* ---- 方案 E：自选清单（胶囊条的「切换」+ 全屏清单的「管理」） ---- */
+  list: [],          // [{ code, name, hasProfile, price, changePct, score, label, side }]
+  listError: null,   // 加载失败时的原因，交由 renderChips 呈现（不要在数据层直接写 DOM）
+  meta: {},          // code → { score, label, side }：跨 loadWatchlist 保留，否则每 8s 刷新会把评分清空
+  sort: 'none',      // none | score | chg | code（只影响全屏清单，胶囊条永远按添加顺序）
+  q: '',             // 全屏清单内的本地筛选词
+  sheetOpen: false,
+  searchRows: null,  // 手机端「按名称/拼音添加」的搜索结果
+  searchQ: '',
+  warming: false,
+  ticking: false,
+  narrow: null       // 上一次的断点归属，用于跨越 860px 时重置图表折叠态
+};
 
 /* ============================ API ============================ */
 /** 静态部署（GitHub Pages）时由 static-api.js 提供本地实现，其余场景走 HTTP 后端 */
@@ -36,56 +68,97 @@ function toast(msg) {
 }
 
 /* ============================ 自选股 ============================ */
+/**
+ * 数据层：只把「远端自选 + 行情」整理成 state.list，然后交给 refreshAll 统一渲染。
+ *
+ * 为什么不再在这里逐元素绑事件（方案 E 的关键结构改动）：
+ * 这个列表每 8 秒被重建一次，逐元素 addEventListener 意味着监听器跟着一起重建 ——
+ * 「刷新之后点不动」「点了没反应」这类 bug 的老家就在这里。交互全部改为
+ * document 级事件委托（见文件末尾 boot()），渲染层因此变成纯粹的叶子函数。
+ */
 async function loadWatchlist() {
-  const box = $('#watchlist');
+  let r;
   try {
-    const r = await api('/api/watchlist');
-    state.codes = r.codes;
-    state.refreshSec = r.refreshSec || 8;
-    $('#refreshSec').textContent = state.refreshSec;
-    $('#wlCount').textContent = r.list.length;
-    box.innerHTML = r.list.map((it) => {
-      const q = it.quote || {};
-      const c = q.changePct;
-      return `<div class="wl-item ${state.current === it.code ? 'active' : ''}" data-code="${it.code}">
-        <div class="wl-row1">
-          <span class="wl-name">${esc(it.name)}
-            ${it.hasProfile ? '<span class="tag" style="font-size:10px">画像</span>' : ''}
-          </span>
-          <button class="wl-del" data-del="${esc(it.code)}" title="移除">✕</button>
-        </div>
-        <div class="wl-row2">
-          <span class="wl-code">${esc(it.code)}</span>
-          <span><span class="wl-price ${cls(c)}">${q.price != null ? fmt(q.price) : '—'}</span>
-          <span class="wl-chg ${cls(c)}"> ${sign(c)}%</span></span>
-        </div>
-      </div>`;
-    }).join('') || '<div class="empty-hint">暂无自选股，请在上方搜索添加</div>';
-
-    box.querySelectorAll('.wl-item').forEach((el) => {
-      el.addEventListener('click', (e) => {
-        if (e.target.dataset.del) return;
-        selectStock(el.dataset.code);
-      });
-    });
-    box.querySelectorAll('.wl-del').forEach((b) => {
-      b.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        await api('/api/watchlist', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ remove: b.dataset.del })
-        });
-        if (state.current === b.dataset.del) { state.current = null; $('#detail').hidden = true; $('#empty').hidden = false; clearDiag(); }
-        toast('已移除 ' + b.dataset.del);
-        loadWatchlist();
-      });
-    });
+    r = await api('/api/watchlist');
   } catch (e) {
-    box.innerHTML = `<div class="loading">加载失败：${e.message}</div>`;
+    state.listError = e.message;
+    state.list = [];
+    refreshAll();
+    return;
+  }
+  state.listError = null;
+  state.codes = r.codes;
+  state.refreshSec = r.refreshSec || 8;
+  const rs = $('#refreshSec'); if (rs) rs.textContent = state.refreshSec;
+  const wc = $('#wlCount'); if (wc) wc.textContent = r.list.length;
+
+  state.list = r.list.map((it) => {
+    const q = it.quote || {};
+    const m = state.meta[it.code] || {};
+    return {
+      code: it.code,
+      name: it.name || m.name || it.code,
+      hasProfile: !!it.hasProfile,
+      price: q.price == null ? null : q.price,
+      changePct: q.changePct == null ? null : q.changePct,
+      score: m.score == null ? null : m.score,
+      label: m.label || null,
+      side: m.side || null
+    };
+  });
+  refreshAll();
+  warmScores();            // 补齐还没评分的标的；顺序执行、失败静默（见该函数注释）
+}
+
+/**
+ * 把一份分析结果里「清单要用的那三样」记进 state.meta。
+ * 只留结论级信息，不缓存整个 d.data —— 那是当前标的的详情，缓存 N 份会白占内存，
+ * 而且 refreshAll 之后容易拿旧数据渲染新标的。
+ */
+function applyMeta(code, d) {
+  if (!d || !d.scores || !d.action) return;
+  state.meta[code] = {
+    name: d.name,
+    score: d.scores.composite,
+    label: d.action.label,
+    side: SIDE_BY_ACTION[d.action.key] || 'neutral'
+  };
+}
+
+/**
+ * 评分预热：清单里每只都先算一次，好让胶囊上的「评分」和清单里的方向徽标有真数。
+ *
+ * 三条硬约束（都是踩过的坑）：
+ *   1. 顺序执行 —— 并发 N 个请求在弱网/代理下更容易整体超时，而这只是"锦上添花"的功能；
+ *   2. 失败静默 —— app.js 把 unhandledrejection 接到诊断面板上，预热失败若冒泡，
+ *      用户会看到一个和自己操作无关的「分析失败」面板；
+ *   3. 不覆盖当前标的 —— 当前标的的详情由 selectStock / 定时刷新负责，这里不插手。
+ */
+async function warmScores() {
+  if (state.warming) return;
+  state.warming = true;
+  try {
+    const todo = state.list.filter((it) => it.score == null).map((it) => it.code);
+    for (const code of todo) {
+      try {
+        const r = await api('/api/analyze?code=' + encodeURIComponent(code));
+        if (r && r.ok && r.data) {
+          applyMeta(code, r.data);
+          const it = state.list.find((x) => x.code === code);
+          if (it) Object.assign(it, state.meta[code]);
+          if (code !== state.current) { renderChips(); renderAll(); }
+        }
+      } catch (_) { /* 静默：预热失败不影响主流程 */ }
+    }
+  } finally {
+    state.warming = false;
   }
 }
 
-/* ============================ 搜索 ============================ */
+/* ============================ 搜索（桌面侧栏） ============================ */
+/* 手机端这块被方案 E 的移动布局隐藏（`.add-block{display:none}`），
+   添加统一走底部全屏清单的输入框；那里的 `addStock()` 会把非 6 位代码的输入
+   转成同一套搜索接口，所以按名称/拼音添加的能力在手机端并没有丢。 */
 let searchTimer = null;
 async function doSearch() {
   const q = $('#searchInput').value.trim();
@@ -94,22 +167,15 @@ async function doSearch() {
   try {
     const r = await api('/api/search?q=' + encodeURIComponent(q));
     box.innerHTML = (r.rows || []).map((x) =>
-      `<div class="sr-item" data-code="${esc(x.code)}">
+      `<div class="sr-item" data-add="${esc(x.code)}">
          <span class="sr-name">${esc(x.name)}</span>
          <span class="sr-meta">${esc(x.code)} · ${esc(x.type || '')} <b style="color:var(--accent)">+ 添加</b></span>
        </div>`).join('') || '<div class="empty-hint">未找到匹配标的</div>';
-    box.querySelectorAll('.sr-item').forEach((el) => el.addEventListener('click', async () => {
-      await api('/api/watchlist', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ add: el.dataset.code })
-      });
-      toast('已添加到自选：' + el.dataset.code);
-      box.innerHTML = '';
-      $('#searchInput').value = '';
-      await loadWatchlist();
-      selectStock(el.dataset.code);
-    }));
-  } catch (e) { box.innerHTML = `<div class="empty-hint">搜索失败：${e.message}</div>`; }
+  } catch (e) { box.innerHTML = `<div class="empty-hint">搜索失败：${esc(e.message)}</div>`; }
+}
+function clearSearchUi() {
+  const box = $('#searchResults'); if (box) box.innerHTML = '';
+  const inp = $('#searchInput'); if (inp) inp.value = '';
 }
 
 /* ============================ 失败诊断 ============================ */
@@ -312,19 +378,34 @@ window.addEventListener('unhandledrejection', (e) => {
 });
 
 /* ============================ 详情渲染 ============================ */
+/**
+ * 选中标的。
+ *
+ * 顺序有讲究：先给「即时反馈」（高亮胶囊 / 收起清单 / 回到顶部），再等网络出详情。
+ * 反过来的话，弱网下用户点完胶囊要愣一两秒才看到任何变化，会以为没点上，
+ * 然后反复点 —— 而每一次点击都会再发一个请求。
+ */
 async function selectStock(code) {
+  const changed = state.current !== code;
   state.current = code;
-  $$('.wl-item').forEach((el) => el.classList.toggle('active', el.dataset.code === code));
+  state.sheetOpen = false;          // 从清单里选完就收起来，别挡着刚选中的详情
+  state.searchRows = null;
+  resetSheetQuery();
   $('#empty').hidden = true;
   $('#detail').hidden = false;
   clearDiag();
+  if (changed) resetReport();       // 换了标的，上一只的报告必须清掉，不能挂在新标的名下
+  refreshAll();
+  centerChip();
+  scrollTop();
   const reqCode = code;
   try {
     const r = await api('/api/analyze?code=' + encodeURIComponent(code));
     if (state.current !== reqCode) return;            // 已切到其它标的，丢弃过期响应，避免「点了A却显示B」
     if (!r.ok) throw new Error(r.error);
     state.data = r.data;
-    renderDetail(r.data);
+    applyMeta(code, r.data);                          // 让胶囊与清单立刻拿到这一只的评分/结论
+    refreshAll();
   } catch (e) {
     if (state.current !== reqCode) return;            // 已切换，不再弹诊断覆盖新标的
     // 把版本号一起写进提示：远程看一张截图就能判断对方跑的是不是最新代码
@@ -335,6 +416,10 @@ async function selectStock(code) {
 }
 
 function renderDetail(d) {
+  /* 没有数据就什么都不做：首屏、切换瞬间、以及刷新失败时都会走到这里。
+     保留上一屏/占位内容，比先清成空白再填要好 —— 不会闪，也不会把已经画好的
+     K 线在每次轻量刷新（如开合清单）时抹掉。显隐由 selectStock / showDiag 控制。 */
+  if (!d) return;
   const q = d.quote;
   const c = q.changePct;
 
@@ -524,14 +609,22 @@ function renderDetail(d) {
     $('#profileBody').innerHTML = blocks.join('') + `<div class="profile-grid">${boxes.join('')}</div>`;
   }
 
-  /* 报告区重置 */
-  state.report = null;
-  $('#downloadHtml').disabled = true;
-  $('#downloadMd').disabled = true;
+  /* 报告区不在这里重置。
+     原因：renderDetail 现在由 refreshAll 统一调度，一次开合清单、一次切页都会走到它；
+     把「清空报告」放进来，就会变成「刚生成完报告，随手点开清单就把下载按钮锁了」。
+     报告只在真正换标的时清（selectStock → resetReport）。 */
 
   renderChannel(d.ind);
   drawMinute(d.chart);
   drawKline(d.chart, d.ind);
+}
+
+/** 换标的时清报告：body 要回到提示语，否则会出现「B 的标题下挂着 A 的报告」 */
+function resetReport() {
+  state.report = null;
+  const h = $('#downloadHtml'); if (h) h.disabled = true;
+  const m = $('#downloadMd'); if (m) m.disabled = true;
+  const b = $('#reportBody'); if (b) b.innerHTML = REPORT_HINT;
 }
 
 function redrawCharts() {
@@ -908,20 +1001,312 @@ function download(name, content, type) {
   setTimeout(() => URL.revokeObjectURL(a.href), 3000);
 }
 
+/* ==========================================================================
+   方案 E · 顶部胶囊（切换）+ 内容横滑换股 + 底部全屏清单（管理）
+   --------------------------------------------------------------------------
+   层级：数据层 → 计算层(纯函数) → 渲染层(叶子) → refreshAll() 统一调度。
+
+   铁律：refreshAll 是唯一的调度者，也是唯一的联动点；渲染函数之间不互相调用。
+   为什么值得这么严：一旦「A 里调 B、B 里又调 A」，就会在 state 只更新了一半的时候
+   触发重绘，表现是随机的错位、翻倍渲染、以及"点了没反应但过一会儿又对了"这类
+   无法复现的 bug。叶子渲染 + 单点调度，是唯一能长时间稳住的结构。
+   交互一律走 document 级委托（列表每 8s 重建一次，逐元素绑定必然踩坑）。
+   ========================================================================== */
+
+/* 报告区的初始提示语：从 index.html 原样抓一次，避免同一段文案在两处维护而漂移 */
+const REPORT_HINT = (() => {
+  const el = $('#reportBody');
+  return (el && el.innerHTML) || '';
+})();
+
+/* ------------------------- 计算层（纯函数，不碰 DOM） ------------------------- */
+
+/** 全屏清单要显示的那一份：先按关键词筛，再排序。
+    只影响清单 —— 顶部胶囊条永远按「添加顺序」，位置稳定才点得准。 */
+function viewList() {
+  const q = state.q.trim().toLowerCase();
+  const arr = state.list.filter((d) =>
+    !q || d.code.indexOf(q) >= 0 || String(d.name).toLowerCase().indexOf(q) >= 0);
+  if (state.sort === 'score') arr.sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
+  else if (state.sort === 'chg') arr.sort((a, b) => (b.changePct ?? -999) - (a.changePct ?? -999));
+  else if (state.sort === 'code') arr.sort((a, b) => a.code.localeCompare(b.code));
+  return arr;
+}
+
+/* --------------------- 渲染层（叶子函数，互不调用） --------------------- */
+
+/**
+ * 顶部胶囊条（手机上是主切换控件）。
+ *
+ * 同一份结构供两端用，靠 CSS 切换显隐，不按视口写两套渲染：
+ *   桌面 —— 名称 / ✕移除 / 代码 / 价格 / 涨跌幅（沿用原有信息密度）
+ *   手机 —— 名称 / 涨跌幅 ｜ 代码 / 评分（方案 E 的几何：一眼判断该不该点进去）
+ * 因此同一个数值会出现两次（.m-only / .d-only 各一份），这是刻意的：
+ * 用纯 CSS 切显隐，比在 JS 里按 innerWidth 分支渲染要稳 ——
+ * 后者在旋转屏幕、拖动窗口时会出现「渲染了但没重渲染」的中间态。
+ */
+function renderChips() {
+  const box = $('#watchlist');
+  if (!box) return;
+  if (state.listError) {
+    box.innerHTML = `<div class="loading">加载失败：${esc(state.listError)}</div>`;
+    return;
+  }
+
+  const chips = state.list.map((it) => {
+    const k = it.changePct == null ? 'flat' : cls(it.changePct);
+    const cs = it.changePct == null ? '—' : sign(it.changePct) + '%';
+    return `<div class="wl-item ${state.current === it.code ? 'active' : ''}" data-code="${esc(it.code)}" role="button" tabindex="0" title="${esc(it.name)}">
+      <div class="wl-row1">
+        <span class="wl-name">${esc(it.name)}${it.hasProfile ? '<span class="tag" style="font-size:10px">画像</span>' : ''}</span>
+        <span class="wl-chg m-only ${k}">${cs}</span>
+        <button class="wl-del" data-del="${esc(it.code)}" title="移除">✕</button>
+      </div>
+      <div class="wl-row2">
+        <span class="wl-code">${esc(it.code)}</span>
+        <span class="wl-score m-only">评分 ${it.score == null ? '—' : it.score}</span>
+        <span class="wl-q"><span class="wl-price ${k}">${it.price == null ? '—' : fmt(it.price)}</span><span class="wl-chg d-only ${k}"> ${it.changePct == null ? '' : cs}</span></span>
+      </div>
+    </div>`;
+  }).join('');
+
+  /* 空列表的提示按端给不同的话：手机端上方根本没有搜索框，指过去只会让人找不到 */
+  const empty = state.list.length ? ''
+    : `<div class="empty-hint">
+         <span class="d-only">暂无自选股，请在上方搜索添加</span>
+         <span class="m-only">暂无自选股，点右侧「清单」添加</span>
+       </div>`;
+
+  /* 「清单」入口必须无条件渲染，空列表时也要在。
+     手机端添加标的的唯一入口就在清单里（搜索框被移动布局隐藏了）——
+     跟着空列表一起藏掉会变成死锁：没标的 → 没入口 → 加不了标的。 */
+  box.innerHTML = empty + chips
+    + `<button class="chip-all" id="chipAll" type="button" title="打开自选清单">清单 ${state.list.length}${ICON.chev}</button>`;
+}
+
+/**
+ * 底部全屏清单的行。两种内容共用同一块列表区：
+ *   自选态 —— 可点行（换股）+ 删除
+ *   搜索态 —— 搜索结果（添加）；手机端没有桌面那块搜索框，按名称/拼音添加由这里接管
+ */
+function renderAll() {
+  const box = $('#allList');
+  if (!box) return;
+  const cnt = $('#allCnt');
+
+  if (state.searchRows) {
+    const rows = state.searchRows;
+    if (cnt) cnt.textContent = `搜索「${state.searchQ}」 ${rows.length} 条`;
+    const cancel = '<button type="button" data-cancel-search>取消搜索</button>';
+    box.innerHTML = rows.length
+      ? `<div class="as-note">点右侧「添加」加入自选${cancel}</div>` + rows.map((x) => `<div class="al-row">
+          <div class="al-main">
+            <div class="al-t1"><span class="al-nm">${esc(x.name)}</span><span class="al-cd">${esc(x.code)}</span></div>
+            <div class="al-t2"><span class="al-sc">${esc(x.type || '')}</span></div>
+          </div>
+          <button class="al-add" type="button" data-add="${esc(x.code)}">添加</button>
+        </div>`).join('')
+      : `<div class="as-note">没有匹配「${esc(state.searchQ)}」的标的${cancel}</div>`;
+    return;
+  }
+
+  const arr = viewList();
+  if (cnt) cnt.textContent = `${state.list.length} 只 · 显示 ${arr.length}`;
+  box.innerHTML = arr.length
+    ? arr.map((d) => {
+      const k = d.changePct == null ? 'flat' : cls(d.changePct);
+      return `<div class="al-row${d.code === state.current ? ' active' : ''}">
+        <div class="al-main" data-code="${esc(d.code)}" role="button" tabindex="0">
+          <div class="al-t1"><span class="al-nm">${esc(d.name)}</span><span class="al-cd">${esc(d.code)}</span></div>
+          <div class="al-t2">
+            <span class="al-chg ${k}">${d.changePct == null ? '—' : sign(d.changePct) + '%'}</span>
+            <span class="al-cd">${d.price == null ? '—' : '¥' + fmt(d.price)}</span>
+            <span class="al-sc">评分 ${d.score == null ? '—' : d.score}</span>
+            <span class="al-side ${d.side || ''}">${esc(d.label || '待评估')}</span>
+          </div>
+        </div>
+        <button class="al-del" type="button" data-del="${esc(d.code)}" title="移除">${ICON.trash}</button>
+      </div>`;
+    }).join('')
+    : `<div class="as-empty">${state.list.length ? '没有匹配的标的' : '自选还是空的，在下面添加一只'}</div>`;
+
+  $$('#allSorts button').forEach((b) => b.classList.toggle('active', b.getAttribute('data-sort') === state.sort));
+}
+
+/* 图表折叠：默认态由断点决定 —— 桌面展开（顺带避免 JS 未跑完时闪一下空白），
+   手机折叠（否则 380px 的 K 线把详情正文顶到很远）。 */
+const isNarrow = () => window.innerWidth <= 860;
+function chartIsOpen(card) {
+  return isNarrow() ? card.classList.contains('open') : !card.classList.contains('collapsed');
+}
+function setChartOpen(card, open) {
+  if (isNarrow()) card.classList.toggle('open', open);
+  else card.classList.toggle('collapsed', !open);
+}
+/** 回到当前端的默认态：两端都只需清掉标记（手机无 .open=折叠，桌面无 .collapsed=展开） */
+function resetChartsForViewport() {
+  $$('.chart-card').forEach((card) => card.classList.remove('open', 'collapsed'));
+}
+
+function renderChartLabel() {
+  $$('.chart-card').forEach((card) => {
+    const btn = card.querySelector('.chart-toggle');
+    if (!btn) return;
+    const open = chartIsOpen(card);
+    btn.innerHTML = (open ? '收起' : '展开') + ICON.chev;
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+}
+
+function renderSheetState() {
+  const sh = $('#allSheet'), mk = $('#sheetMask');
+  if (sh) sh.classList.toggle('open', state.sheetOpen);
+  if (mk) mk.classList.toggle('open', state.sheetOpen);
+  /* 锁住页面滚动：否则清单里向下滑动会「穿透」到背后长页面上，手指一松才发现跑偏了 */
+  document.body.style.overflow = state.sheetOpen ? 'hidden' : '';
+}
+
+/* ------------------ 统一刷新入口（唯一调度者，唯一联动点） ------------------ */
+function refreshAll() {
+  renderChips();
+  renderDetail(state.data);
+  renderAll();
+  renderChartLabel();
+  renderSheetState();
+}
+
+/* ------------------- 交互层：改数据 → 调 refreshAll ------------------- */
+
+/** 把当前胶囊滚到可视区中间：横滑之后选中项可能停在屏幕外，用户会找不到自己在哪 */
+function centerChip() {
+  const a = document.querySelector('.watchlist .wl-item.active');
+  if (!a || !a.scrollIntoView) return;
+  try { a.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' }); }
+  catch (_) { a.scrollIntoView(); }
+}
+
+function scrollTop() {
+  const box = document.querySelector('.content');
+  if (box) box.scrollTop = 0;
+  if (isNarrow()) window.scrollTo(0, 0);
+}
+
+function openSheet(flag) {
+  state.sheetOpen = !!flag;
+  if (!state.sheetOpen) {
+    state.searchRows = null;
+    resetSheetQuery();
+  }
+  refreshAll();
+}
+
+function resetSheetQuery() {
+  state.q = '';
+  const el = $('#allSearch'); if (el) el.value = '';
+}
+
+/** 选中一只：同一只就只是收起清单，不做无谓的重新分析 */
+async function applyPick(code) {
+  if (!code) return;
+  if (code === state.current) { state.sheetOpen = false; refreshAll(); return; }
+  await selectStock(code);
+}
+
+/** 横滑换股：按「添加顺序」在 list 里前后挪一位（与胶囊条的排列一致） */
+async function step(delta) {
+  if (state.list.length < 2) return;
+  const i = state.list.findIndex((x) => x.code === state.current);
+  const j = (Math.max(0, i) + delta + state.list.length) % state.list.length;
+  await selectStock(state.list[j].code);
+}
+
+async function removeStock(code) {
+  const wasCurrent = state.current === code;
+  try {
+    await api('/api/watchlist', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ remove: code })
+    });
+  } catch (e) { toast('移除失败：' + e.message); return; }
+  delete state.meta[code];
+  toast('已移除 ' + code);
+  await loadWatchlist();
+  if (!wasCurrent) return;
+  const next = state.list[0];
+  if (next) { await selectStock(next.code); return; }
+  state.current = null;
+  state.data = null;
+  $('#detail').hidden = true;
+  $('#empty').hidden = false;
+  clearDiag();
+  refreshAll();
+}
+
+async function addByCode(code) {
+  if (state.list.some((x) => x.code === code)) {
+    toast('已在自选中');
+    state.sheetOpen = false;
+    await selectStock(code);
+    return;
+  }
+  try {
+    await api('/api/watchlist', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ add: code })
+    });
+  } catch (e) { toast('添加失败：' + e.message); return; }
+  toast('已添加到自选：' + code);
+  state.searchRows = null;
+  resetSheetQuery();
+  const inp = $('#addInput'); if (inp) inp.value = '';
+  clearSearchUi();
+  await loadWatchlist();
+  await selectStock(code);   // selectStock 内部会把清单收起
+}
+
+/**
+ * 清单里的「添加」。6 位代码直接加；否则当作名称/拼音去搜索。
+ * 这一条是为了守住原有能力：桌面侧栏那块搜索框在手机上被方案 E 隐藏了，
+ * 如果这里只认 6 位数字，手机用户就再也没法用「茅台」这种输入添加标的。
+ */
+async function addStock() {
+  const inp = $('#addInput');
+  if (!inp) return;
+  const raw = inp.value.trim();
+  if (!raw) return;
+  const m = raw.match(/\d{6}/);
+  if (m) { await addByCode(m[0]); return; }
+  try {
+    const r = await api('/api/search?q=' + encodeURIComponent(raw));
+    state.searchRows = r.rows || [];
+    state.searchQ = raw;
+    refreshAll();
+  } catch (e) { toast('搜索失败：' + e.message); }
+}
+
 /* ============================ 实时刷新 ============================ */
 function startStream() {
   if (state.timer) clearInterval(state.timer);
   state.timer = setInterval(async () => {
     if (!$('#autoRefresh').checked) return;
     if (document.hidden) return;
-    await loadWatchlist();
-    const cur = state.current;
-    if (!cur) return;
+    if (state.ticking) return;   // 上一轮还没跑完就跳过：弱网下 setInterval 不会等 await，
+                                 // 不挡一下就会出现「请求一层叠一层」，越慢越堵
+    state.ticking = true;
     try {
+      await loadWatchlist();
+      const cur = state.current;
+      if (!cur) return;
       const r = await api('/api/analyze?code=' + encodeURIComponent(cur));
       if (state.current !== cur) return;            // 刷新期间用户已切换标的，丢弃旧响应
-      if (r.ok) { state.data = r.data; renderDetail(r.data); }
-    } catch (_) {}
+      if (r.ok) { state.data = r.data; applyMeta(cur, r.data); refreshAll(); }
+    } catch (_) {
+      /* 定时刷新失败保持静默（与原行为一致）：
+         它由时钟触发、不来自用户操作，弹「分析失败」只会让人以为是自己点坏了。
+         真正的失败可见性由用户主动触发的路径（selectStock）负责。 */
+    } finally {
+      state.ticking = false;
+    }
   }, state.refreshSec * 1000);
 }
 
@@ -939,6 +1324,10 @@ function tickClock() {
 }
 
 /* ============================ 事件绑定 ============================ */
+/* 绑定规则：静态元素（index.html 里写死、不会被重新渲染的）直接绑；
+   凡是可能被 renderXxx 重建的元素（胶囊、清单行、搜索行）一律走 document 委托。
+   混用是这类应用最常见的事故源 —— 直接绑的那些在列表重建后就静默失效了。 */
+
 $('#searchBtn').addEventListener('click', doSearch);
 $('#searchInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
 $('#searchInput').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(doSearch, 420); });
@@ -973,7 +1362,116 @@ hr{border:0;border-top:1px solid #e5e7eb;margin:24px 0}code{background:#f4f5f7;p
 </head><body>${state.report.bodyHtml || ''}</body></html>`;
   download(`${state.report.code}_${state.report.name}_投研持仓攻略.html`, html, 'text/html;charset=utf-8');
 });
-window.addEventListener('resize', () => redrawCharts());
+
+/* ---- 底部全屏清单：清单一层是静态 DOM，直接绑即可 ---- */
+const _addBtn = $('#addBtn');
+if (_addBtn) _addBtn.addEventListener('click', addStock);
+const _addInput = $('#addInput');
+if (_addInput) _addInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); addStock(); }
+});
+const _allSearch = $('#allSearch');
+if (_allSearch) _allSearch.addEventListener('input', () => {
+  state.q = _allSearch.value;   // 只重渲染清单，不惊动胶囊与详情
+  renderAll();
+});
+
+/* ---- document 级委托：一次绑定，列表重建多少次都有效 ---- */
+document.addEventListener('click', (e) => {
+  const t = e.target;
+  if (!t || !t.closest) return;
+
+  /* 顺序即优先级：从最具体的按钮往外判断，最后才是「整行点击」 */
+  const del = t.closest('[data-del]');
+  if (del) { e.stopPropagation(); removeStock(del.getAttribute('data-del')); return; }
+
+  const add = t.closest('[data-add]');
+  if (add) { e.stopPropagation(); addByCode(add.getAttribute('data-add')); return; }
+
+  if (t.closest('[data-cancel-search]')) { state.searchRows = null; refreshAll(); return; }
+
+  if (t.closest('#chipAll')) { openSheet(true); return; }
+  if (t.closest('#sheetClose') || t.closest('#sheetMask')) { openSheet(false); return; }
+
+  const sb = t.closest('#allSorts button');
+  if (sb) { state.sort = sb.getAttribute('data-sort'); renderAll(); return; }
+
+  const ct = t.closest('.chart-toggle');
+  if (ct) {
+    const card = ct.closest('.chart-card');
+    if (card) {
+      const open = !chartIsOpen(card);
+      setChartOpen(card, open);
+      renderChartLabel();
+      /* 展开时重画：折叠期间画布被 max-height 压成 0，某些引擎会把
+         clientWidth 记成上一次的测量值，直接拿来画会得到一张错位的图 */
+      if (open) redrawCharts();
+    }
+    return;
+  }
+
+  const chip = t.closest('.watchlist [data-code]');
+  if (chip) { applyPick(chip.getAttribute('data-code')); return; }
+
+  const row = t.closest('.al-main[data-code]');
+  if (row) { applyPick(row.getAttribute('data-code')); return; }
+});
+
+/* 键盘可达：Esc 收起清单；回车/空格触发带 role=button 的胶囊与清单行 */
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && state.sheetOpen) { openSheet(false); return; }
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const t = e.target;
+  if (!t || !t.getAttribute) return;
+  const code = t.getAttribute('data-code');
+  if (code && (t.classList.contains('wl-item') || t.classList.contains('al-main'))) {
+    e.preventDefault();
+    applyPick(code);
+  }
+});
+
+/* ---- 内容区横滑换股 ----
+   避开图表区与清单层：图表自己要吃横向手势，清单是固定层，
+   不排除掉就会出现「想拖着看 K 线，结果股票被换掉」这种最恼人的误操作。 */
+(function bindSwipe() {
+  const box = document.querySelector('.content');
+  if (!box) return;
+  let sx = 0, sy = 0, lock = null;
+  box.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) { lock = 'no'; return; }
+    if (e.target.closest && e.target.closest('.chart-card, .as-panel, .as-mask')) { lock = 'no'; return; }
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY; lock = null;
+  }, { passive: true });
+  box.addEventListener('touchmove', (e) => {
+    if (lock === 'no' || lock === 'v') return;
+    const dx = e.touches[0].clientX - sx, dy = e.touches[0].clientY - sy;
+    /* 先判方向再决定要不要截：横向分量明显大于纵向才认作换股手势，
+       否则手指稍微斜一点就会把正常上下滚动变成换股 */
+    if (lock === null && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
+      lock = Math.abs(dx) > Math.abs(dy) * 1.3 ? 'h' : 'v';
+    }
+  }, { passive: true });
+  box.addEventListener('touchend', (e) => {
+    if (lock === 'h') {
+      const t0 = e.changedTouches[0];
+      const dx = t0.clientX - sx, dy = t0.clientY - sy;
+      if (Math.abs(dx) > 56 && Math.abs(dx) > Math.abs(dy)) step(dx < 0 ? 1 : -1);
+    }
+    lock = null;
+  }, { passive: true });
+})();
+
+/* 视口宽度变化：重画图表 + 跨断点时回到该端的默认态 */
+window.addEventListener('resize', () => {
+  redrawCharts();
+  const narrow = isNarrow();
+  if (narrow !== state.narrow) {
+    state.narrow = narrow;
+    if (!narrow && state.sheetOpen) state.sheetOpen = false;
+    resetChartsForViewport();
+    refreshAll();
+  }
+});
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && state.current) selectStock(state.current);
 });
@@ -984,8 +1482,12 @@ document.addEventListener('visibilitychange', () => {
   if (tag) tag.textContent = BUILD_TAG;   // 远程排查时用来确认「对方拿到的是不是新版」
   tickClock();
   setInterval(tickClock, 1000);
+  state.narrow = isNarrow();
+  resetChartsForViewport();   // 显式落到当前端的默认折叠态，不依赖 CSS 初始值的巧合
+  renderChartLabel();
   await loadWatchlist();
   startStream();
-  const auto = state.codes[0];
+  const auto = state.list[0] && state.list[0].code;
   if (auto) selectStock(auto);
+  else refreshAll();
 })();

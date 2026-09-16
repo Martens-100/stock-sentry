@@ -9,7 +9,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <title>StockSentry · 智能盯盘与投研生成系统</title>
-<link rel="stylesheet" href="style.css?v=c199844a">
+<link rel="stylesheet" href="style.css?v=924a8d96">
 </head>
 <body>
 
@@ -34,9 +34,39 @@
   </div>
 </header>
 
+<!-- ===== 方案 E：底部全屏自选清单（管理态：排序 / 搜索 / 删除 / 添加） =====
+     职责分离——胶囊条只负责「切换」，这一层只负责「管理」。
+     手机上之所以必需：删除按钮放在胶囊上既会被横滑手势误触，又没有常显位；
+     收进这里之后，胶囊条变回干净的切换控件。桌面（>=861px）由 CSS 整体隐藏。 -->
+<div id="sheetMask" class="as-mask"></div>
+<div id="allSheet" class="as-panel" role="dialog" aria-modal="true" aria-label="自选清单">
+  <div class="as-grip"><i></i></div>
+  <div class="as-head">
+    <h3>自选清单</h3>
+    <span class="as-cnt" id="allCnt"></span>
+    <button class="as-x" id="sheetClose" type="button" aria-label="关闭清单">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="as-tools">
+    <input id="allSearch" type="search" inputmode="search" placeholder="在自选中筛选：代码 / 名称" autocomplete="off">
+    <div class="sorts" id="allSorts">
+      <button data-sort="none" type="button">添加顺序</button>
+      <button data-sort="score" type="button">评分 ↓</button>
+      <button data-sort="chg" type="button">涨跌 ↓</button>
+      <button data-sort="code" type="button">代码</button>
+    </div>
+  </div>
+  <div class="as-list" id="allList"></div>
+  <div class="as-add">
+    <input id="addInput" type="search" inputmode="search" placeholder="6 位代码，或名称/拼音，如 600519、茅台" autocomplete="off">
+    <button class="btn primary" id="addBtn" type="button">添加</button>
+  </div>
+</div>
+
 <main class="layout">
-  <aside class="sidebar">
-    <div class="side-block">
+  <aside class="sidebar" id="sidebar">
+    <div class="side-block add-block">
       <div class="side-title">添加标的</div>
       <div class="search-row">
         <input id="searchInput" type="text" placeholder="代码 / 名称 / 拼音，如 000063、科伦" autocomplete="off">
@@ -134,29 +164,39 @@
         <div class="rail-viz" id="railViz"></div>
       </div>
 
-      <!-- 图表 -->
-      <div class="card chart-card">
+      <!-- 图表：手机默认折叠（否则 380px 的 K 线把详情正文顶到很远），点标题右侧「展开」 -->
+      <div class="card chart-card chart-minute">
         <div class="card-title">
-          分时走势
+          <span class="chart-name">分时走势</span>
           <span class="chart-legend"><i class="lg-price"></i>价格<i class="lg-avg"></i>均价</span>
+          <button class="chart-toggle" type="button" aria-expanded="false">展开
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
         </div>
-        <canvas id="minuteChart" height="220"></canvas>
+        <div class="chart-body">
+          <canvas id="minuteChart" height="220"></canvas>
+        </div>
       </div>
 
-      <div class="card chart-card">
+      <div class="card chart-card chart-kline">
         <div class="card-title">
-          K线 · 均线 · 上下轨 · 导轨通道 · 成交量 · MACD（近120个交易日）
+          <span class="chart-name">K线 · 均线 · 上下轨 · 导轨通道 · 成交量 · MACD（近120个交易日）</span>
           <span class="chart-legend">
             <i class="lg-ma5"></i>MA5<i class="lg-ma10"></i>MA10<i class="lg-ma20"></i>MA20<i class="lg-ma60"></i>MA60
             <i class="lg-bollu"></i>布林上轨<i class="lg-bolld"></i>布林下轨<i class="lg-rail"></i>导轨通道
           </span>
+          <button class="chart-toggle" type="button" aria-expanded="false">展开
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
         </div>
-        <div class="chart-toggles">
-          <label><input type="checkbox" id="tglBoll" checked> 布林上下轨</label>
-          <label><input type="checkbox" id="tglRail" checked> 回归导轨通道</label>
-          <label><input type="checkbox" id="tglMA" checked> 均线</label>
+        <div class="chart-body">
+          <div class="chart-toggles">
+            <label><input type="checkbox" id="tglBoll" checked> 布林上下轨</label>
+            <label><input type="checkbox" id="tglRail" checked> 回归导轨通道</label>
+            <label><input type="checkbox" id="tglMA" checked> 均线</label>
+          </div>
+          <canvas id="klineChart" height="380"></canvas>
         </div>
-        <canvas id="klineChart" height="380"></canvas>
       </div>
 
       <!-- 信号 -->
@@ -214,6 +254,6 @@
 <script>window.__SENTRY_STATIC__ = true;</script>
 <script src="bundle.js?v=73bb57b8"></script>
 <script src="static-api.js?v=bd7b916c"></script>
-<script src="app.js?v=e3be122d"></script>
+<script src="app.js?v=8df6e782"></script>
 </body>
 </html>

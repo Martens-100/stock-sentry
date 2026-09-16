@@ -19,6 +19,9 @@ credentials.json
 out/*
 !out/.gitkeep
 
+# 验证脚本产出的截图（构建/验证产物，不入库）
+_shots/
+
 # 系统与日志
 .DS_Store
 *.log
