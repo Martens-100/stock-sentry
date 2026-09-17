@@ -1,0 +1,15 @@
+# StockSentry · Cloudflare Pages 部署配置（免费套餐）
+#
+# 选用的服务类型：Cloudflare Pages（静态托管）
+#   原因：本项目静态版 docs/ 已在浏览器端完成全部逻辑（名称搜索走 smartbox JSONP、
+#         行情/分析亦在客户端），无需 Workers 运行时，也无需 D1 数据库。
+#   Pages 免费额度：无限请求 + 无限带宽 + 500 次构建/月，最适合此类纯静态共享页。
+#
+# 部署命令（需先 `npx wrangler login` 完成一次授权）：
+#   npx wrangler pages deploy docs/ --project-name stocksentry
+#
+# 或在 Cloudflare Dashboard 连接 GitHub 仓库 Martens-100/stock-sentry，
+#   构建命令留空、输出目录填 docs（docs/ 已是预构建产物）。
+name = "stocksentry"
+compatibility_date = "2026-09-17"
+pages_build_output_dir = "docs"

@@ -167,6 +167,28 @@ window.SentryLib = {
   versionedHtml = versionedHtml.replace(/href="style\.css"/, `href="style.css?v=${fingerprints['style.css']}"`);
   fs.writeFileSync(path.join(OUT, 'index.html'), versionedHtml, 'utf8');
 
+  /* ---------------------------------------------------------------- */
+  /* Cloudflare Pages 响应头：安全头 + HTML 不缓存                      */
+  /* ---------------------------------------------------------------- */
+  /**
+   * HTML 设 no-cache：线上无 Cache-Control 时浏览器会启发式缓存，导致"页面更新了
+   * 用户却一直跑旧脚本"这类最难排查的故障。JS/CSS 已带内容指纹 (?v=sha)，
+   * 内容一变 URL 就变，可放心长期缓存；唯独 HTML 必须每次取新的。
+   * 安全头口径与 server.js 的 securityHeaders 保持一致。
+   */
+  const headersTxt = [
+    '/*',
+    '  X-Content-Type-Options: nosniff',
+    '  Referrer-Policy: no-referrer',
+    '  X-Frame-Options: DENY',
+    '  Cross-Origin-Resource-Policy: same-origin',
+    '',
+    '/*.html',
+    '  Cache-Control: no-cache',
+    ''
+  ].join('\n');
+  fs.writeFileSync(path.join(OUT, '_headers'), headersTxt, 'utf8');
+
   // 指纹必须真的落到页面上，否则这套机制形同虚设
   for (const [f, h] of Object.entries(fingerprints)) {
     if (!versionedHtml.includes(`${f}?v=${h}`)) {

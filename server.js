@@ -32,6 +32,9 @@ const WATCHLIST_FILE = path.join(ROOT, 'data', 'watchlist.json');
 const MAX_BODY = 32 * 1024;      // 请求体上限
 const MAX_CODES = 50;            // 单次批量分析的标的上限
 
+const START_TS = Date.now();     // 进程启动时刻，供 /api/health 计算 uptime
+const APP_VERSION = (() => { try { return require('./package.json').version; } catch (_) { return 'unknown'; } })();
+
 if (!fs.existsSync(OUT)) fs.mkdirSync(OUT, { recursive: true });
 
 /* ------------------------- 自选股持久化 ------------------------- */
@@ -182,6 +185,16 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
+    /* --- 健康检查：供守护进程 / 监控脚本探活 --- */
+    if (p === '/api/health') {
+      return replyJson(req, res, {
+        ok: true, service: 'stocksentry',
+        version: APP_VERSION,
+        uptime: Math.round((Date.now() - START_TS) / 1000),
+        ts: Date.now(), pid: process.pid
+      });
+    }
+
     /* --- 自选股 --- */
     if (p === '/api/watchlist' && req.method === 'GET') {
       const w = readWatchlist();
