@@ -1421,8 +1421,21 @@ function deriveLevels(ind) {
   const minTgtDist = atr * 1.2;
   const farRes = resistances.filter((r) => r.price >= P + minTgtDist);
   const target1 = farRes[0]?.price ?? r2(P + atr * 4);
-  let target2 = farRes.filter((r) => r.price > target1)[0]?.price ?? r2(P + atr * 7);
-  if (target2 == null || target2 <= target1) target2 = r2(target1 + atr * 3);
+  /**
+   * 第二目标位须与第一目标位保持最小间距。
+   *
+   * 原实现只判断 target2 > target1，不判断"是否足够远"。当阻力位序列在 target1
+   * 上方存在几乎重合的价位时（实测可低至 0.05%），报告与交易计划里的
+   * 「第一目标位减 1/3、第二目标位再减 1/3」会变成同一价位分两次卖，
+   * 分批止盈失去区分度、看起来像笔误。
+   *
+   * 现要求至少远 1.2×ATR（与 minTgtDist 同口径），不满足则退回 target1 + 3×ATR。
+   * 注意：这里的 target1/target2 是引擎推导值；研报给定的价位在 engine.buildPlan
+   * 里另有口径（不适用本约束，避免改写投研权威值）。
+   */
+  const minTgtGap = atr * 1.2;
+  let target2 = farRes.filter((r) => r.price >= target1 + minTgtGap)[0]?.price ?? r2(target1 + atr * 3);
+  if (target2 == null || target2 <= target1 + minTgtGap) target2 = r2(target1 + atr * 3);
 
   return {
     entry: [entryLo, entryHi],
@@ -1638,15 +1651,33 @@ function technicalRules(ctx) {
   }
 
   /* --- 4. RSI --- */
+  /**
+   * 档位表 + 末条无条件兜底。
+   *
+   * 原实现是四条 if / else if 链（>=75 / <=28 / >=55 / <=45），区间 (45, 55)
+   * 不被任何分支覆盖 —— 该区间静默不产出信号。而 scoreSignals 按信号加权汇总，
+   * 少一条就会让 composite 出现难以察觉的静默偏差，且不报错、不在日志留痕。
+   *
+   * 前四档与原条件逐字等价（含边界值），末档 match: () => true 保证任何取值
+   * 都有归属 —— 把"区间完备性"从人的注意力转移到表结构里：日后新增档位只要
+   * 保留末条兜底，就不可能再留空隙。
+   */
   if (ind.rsi != null) {
-    if (ind.rsi >= 75) push({ id: 'rsi-ob', dim: '超买超卖', name: 'RSI超买', side: 'bear', strength: 3, weight: 6,
-      text: 'RSI 进入超买区，短线追高风险上升', evidence: `RSI(14)=${ind.rsi}` });
-    else if (ind.rsi <= 28) push({ id: 'rsi-os', dim: '超买超卖', name: 'RSI超卖', side: 'bull', strength: 3, weight: 6,
-      text: 'RSI 进入超卖区，存在超跌反弹动能', evidence: `RSI(14)=${ind.rsi}` });
-    else if (ind.rsi >= 55) push({ id: 'rsi-strong', dim: '超买超卖', name: 'RSI偏强', side: 'bull', strength: 2, weight: 5,
-      text: 'RSI 位于强势区，多方掌握主动', evidence: `RSI(14)=${ind.rsi}` });
-    else if (ind.rsi <= 45) push({ id: 'rsi-weak', dim: '超买超卖', name: 'RSI偏弱', side: 'bear', strength: 2, weight: 5,
-      text: 'RSI 位于弱势区，多方动能不足', evidence: `RSI(14)=${ind.rsi}` });
+    const RSI_BANDS = [
+      { id: 'rsi-ob', name: 'RSI超买', side: 'bear', strength: 3, weight: 6,
+        text: 'RSI 进入超买区，短线追高风险上升', match: (r) => r >= 75 },
+      { id: 'rsi-os', name: 'RSI超卖', side: 'bull', strength: 3, weight: 6,
+        text: 'RSI 进入超卖区，存在超跌反弹动能', match: (r) => r <= 28 },
+      { id: 'rsi-strong', name: 'RSI偏强', side: 'bull', strength: 2, weight: 5,
+        text: 'RSI 位于强势区，多方掌握主动', match: (r) => r >= 55 },
+      { id: 'rsi-weak', name: 'RSI偏弱', side: 'bear', strength: 2, weight: 5,
+        text: 'RSI 位于弱势区，多方动能不足', match: (r) => r <= 45 },
+      { id: 'rsi-mid', name: 'RSI中性', side: 'neutral', strength: 1, weight: 3,
+        text: 'RSI 处于中性区间，多空动能均衡，暂无明显超买或超卖', match: () => true }
+    ];
+    const band = RSI_BANDS.find((b) => b.match(ind.rsi));
+    push({ id: band.id, dim: '超买超卖', name: band.name, side: band.side,
+      strength: band.strength, weight: band.weight, text: band.text, evidence: `RSI(14)=${ind.rsi}` });
   }
 
   /* --- 5. KDJ --- */
@@ -2568,6 +2599,9 @@ function buildPlan(ind, profile, actionKey) {
   // 目标位已在 deriveLevels 内保证与现价保持 ≥1.2×ATR 距离，避免"贴脸"导致盈亏比失真
   const target1 = L.target1 ?? d.target1;
   let target2 = L.target2 ?? d.target2;
+  /* 职责分工：此处只防"倒挂"（target2 不高于 target1），不做最小间距约束。
+     L.target2 可能来自 data/profiles.json 的研报价位，属投研权威值，引擎不擅自改写；
+     派生来源（d.target2）的最小间距已由 portrait.deriveLevels 的 minTgtGap 保证。 */
   if (target2 == null || target2 <= target1) target2 = r2(target1 + atr * 3);
 
   /* 盈亏比：以「参考入场价」为基准，而非机械用现价 */

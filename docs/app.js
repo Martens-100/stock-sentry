@@ -168,6 +168,10 @@ async function doSearch() {
   if (!q) { box.innerHTML = ''; return; }
   try {
     const r = await api('/api/search?q=' + encodeURIComponent(q));
+    /* 与 selectStock / startStream 同一防护模式：响应回来后先确认"输入仍是发请求时的那个"。
+       搜索框会被连续输入触发（每次输入都发请求），先发的慢响应若直接渲染，
+       就会把后发的搜索结果覆盖成旧关键词的结果 —— 用户看到的是"打了新字，列表还是旧的"。 */
+    if ($('#searchInput').value.trim() !== q) return;
     box.innerHTML = (r.rows || []).map((x) =>
       `<div class="sr-item" data-add="${esc(x.code)}">
          <span class="sr-name">${esc(x.name)}</span>
@@ -1520,6 +1524,10 @@ async function addStock() {
   if (m) { await addByCode(m[0]); return; }
   try {
     const r = await api('/api/search?q=' + encodeURIComponent(raw));
+    /* 同上：移动端底部清单的输入框同样会被连续输入触发，过期响应不得覆盖新结果。
+       注意此处比的是输入框当前值而非 state.searchQ —— searchQ 是"上一次成功搜索的关键词"，
+       用它比对会把"连续两次相同输入"误判为过期。 */
+    if (inp.value.trim() !== raw) return;
     state.searchRows = r.rows || [];
     state.searchQ = raw;
     refreshAll();
