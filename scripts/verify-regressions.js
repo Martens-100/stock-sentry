@@ -13,6 +13,7 @@
  */
 const rules = require('../lib/rules');
 const portrait = require('../lib/portrait');
+const engine = require('../lib/engine');
 
 let pass = 0;
 let fail = 0;
@@ -129,6 +130,42 @@ console.log('\n===== 回归测试 · 坏数据不得产生倒挂价位 =====');
     ordered,
     `entry=[${lv.entry}] stop=${lv.stopLoss} hard=${lv.hardStop}`);
 });
+
+/* ================================================================== */
+console.log('\n===== 回归测试 · P3 价位口径披露 =====');
+/* ================================================================== */
+
+/** 构造 buildPlan 所需的最小 ind（deriveLevels 只用到 price/atr/keyLevels/ma） */
+function planInd(price, atr) {
+  return { price, atr, keyLevels: [], ma: { ma5: price, ma10: price, ma20: price, ma30: price, ma60: price, ma120: price } };
+}
+
+/* 7. 研报画像：显式给定 entry/stop/target → 全部标记为「研报」 */
+const reportProfile = { levels: { entry: [96, 98], stopLoss: 94, hardStop: 90, target1: 108, target2: 115 }, cost: 100, positionLimit: 0.15 };
+const rp = engine.buildPlan(planInd(100, 2), reportProfile, 'HOLD');
+check('研报显式价位 → levelOrigin 全为 report',
+  rp.levelOrigin.entry && rp.levelOrigin.stopLoss && rp.levelOrigin.hardStop && rp.levelOrigin.target1 && rp.levelOrigin.target2,
+  JSON.stringify(rp.levelOrigin));
+check('研报显式价位 → 标签为「研报」',
+  rp.levelLabels.target1 === '研报' && rp.levelLabels.stopLoss === '研报' && rp.levelLabels.entry === '研报',
+  JSON.stringify(rp.levelLabels));
+
+/* 8. 自动画像：无显式 levels → 全部来自 ATR 推导，标签「ATR反推」 */
+const autoProfile = { auto: true };
+const ap = engine.buildPlan(planInd(100, 2), autoProfile, 'HOLD');
+check('自动画像 → levelOrigin 全为 derived（false）',
+  !ap.levelOrigin.entry && !ap.levelOrigin.target1 && !ap.levelOrigin.stopLoss,
+  JSON.stringify(ap.levelOrigin));
+check('自动画像 → 标签为「ATR反推」',
+  ap.levelLabels.target1 === 'ATR反推' && ap.levelLabels.stopLoss === 'ATR反推' && ap.levelLabels.entry === 'ATR反推',
+  JSON.stringify(ap.levelLabels));
+
+/* 9. 混合口径：研报给定 target 但 entry 缺失（由引擎兜底）→ 逐档独立标注 */
+const mixedProfile = { levels: { target1: 108, target2: 115 }, cost: 100 };
+const mp = engine.buildPlan(planInd(100, 2), mixedProfile, 'HOLD');
+check('混合口径 → target 标「研报」、entry 标「引擎推导」',
+  mp.levelLabels.target1 === '研报' && mp.levelLabels.entry === '引擎推导',
+  `target1=${mp.levelLabels.target1} entry=${mp.levelLabels.entry}`);
 
 /* ================================================================== */
 console.log(`\n通过 ${pass} 项，失败 ${fail} 项`);
