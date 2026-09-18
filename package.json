@@ -17,6 +17,7 @@
     "verify:chart-layers": "node scripts/verify-chart-layers.js",
     "verify:mobile-demos": "node scripts/verify-mobile-demos.js",
     "verify:planE-webkit": "node scripts/verify-planE-webkit.js",
+    "verify:live-webkit": "node scripts/verify-live-webkit.js --local",
     "verify:visual": "node scripts/verify-channel-layout.js && node scripts/verify-chart-layers.js && node scripts/verify-mobile-demos.js && node scripts/verify-planE-webkit.js",
     "verify": "node scripts/verify-regressions.js && node scripts/verify-browser-path.js && node scripts/verify-ui-dom.js"
   },
