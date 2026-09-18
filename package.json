@@ -9,7 +9,17 @@
     "check:secrets": "node scripts/scan-secrets.js",
     "check": "node scripts/scan-secrets.js && node build-static.js",
     "verify:browser": "node scripts/verify-browser-path.js",
-    "verify:ui": "node scripts/verify-ui-dom.js"
+    "verify:ui": "node scripts/verify-ui-dom.js",
+    "verify:regressions": "node scripts/verify-regressions.js",
+    "verify:browser": "node scripts/verify-browser-path.js",
+    "verify:ui": "node scripts/verify-ui-dom.js",
+    "verify:channel-layout": "node scripts/verify-channel-layout.js",
+    "verify:chart-layers": "node scripts/verify-chart-layers.js",
+    "verify:mobile-demos": "node scripts/verify-mobile-demos.js",
+    "verify:planE-webkit": "node scripts/verify-planE-webkit.js",
+    "verify:live-webkit": "node scripts/verify-live-webkit.js --local",
+    "verify:visual": "node scripts/verify-channel-layout.js && node scripts/verify-chart-layers.js && node scripts/verify-mobile-demos.js && node scripts/verify-planE-webkit.js",
+    "verify": "node scripts/verify-regressions.js && node scripts/verify-browser-path.js && node scripts/verify-ui-dom.js"
   },
   "keywords": [
     "a-share",
@@ -25,5 +35,9 @@
   },
   "license": "MIT",
   "private": false,
-  "dependencies": {}
+  "dependencies": {},
+  "devDependencies": {
+    "jsdom": "^30.1.0",
+    "playwright": "^1.63.0"
+  }
 }

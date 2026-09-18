@@ -10,18 +10,47 @@
  * 用法：
  *   node scripts/verify-live-webkit.js [url]
  *   node scripts/verify-live-webkit.js [url] --block-fetch
+ *   node scripts/verify-live-webkit.js --local
  *     --block-fetch 精确模拟「fetch 被拦但 <script> 仍可加载」的环境
  *     （广告拦截插件、隐私保护、部分企业代理都表现为此），
  *     用来在真 WebKit 上验证 JSONP 兜底到底是活的还是死的。
+ *   --local  自起静态服务指向本仓 docs/（CI 用），验证的是本次构建产物而非线上站点；
+ *            与其余 verify-*.js 的自服务约定一致。
  * 默认 url = https://stocksentry-ashare.app.workbuddy.host/
  */
 const { webkit, devices } = require('playwright');
+const fs = require('fs');
+const http = require('http');
+const path = require('path');
 
+const ROOT = path.join(__dirname, '..');
+const DOCS = path.join(ROOT, 'docs');
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8' };
+
+/** 自起静态服务指向 docs/（与 verify-channel-layout 等脚本同款约定） */
+function serveDocs() {
+  return new Promise((resolve) => {
+    const srv = http.createServer((req, res) => {
+      const url = decodeURIComponent(req.url.split('?')[0]);
+      const file = path.join(DOCS, url === '/' ? 'index.html' : url.replace(/^\/+/, ''));
+      if (!file.startsWith(DOCS) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.writeHead(404); res.end('nf'); return; }
+      res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
+      fs.createReadStream(file).pipe(res);
+    });
+    srv.listen(0, '127.0.0.1', () => resolve({ srv, url: `http://127.0.0.1:${srv.address().port}/` }));
+  });
+}
+
+const LOCAL = process.argv.includes('--local');
 const URL = process.argv[2] && !process.argv[2].startsWith('--')
   ? process.argv[2] : 'https://stocksentry-ashare.app.workbuddy.host/';
 const BLOCK_FETCH = process.argv.includes('--block-fetch');
 
 (async () => {
+  let server = null;
+  let target = URL;
+  if (LOCAL) { const s = await serveDocs(); server = s.srv; target = s.url; console.log(`（--local：自起服务 ${target} 指向 docs/）`); }
+  const closeServer = () => { if (server) { try { server.close(); } catch (e) { /* ignore */ } } };
   const browser = await webkit.launch();
   // 用 iPhone 的视口 + UA + 触摸特性，尽量贴近朋友的设备
   const ctx = await browser.newContext({ ...devices['iPhone 15'], ignoreHTTPSErrors: false });
@@ -43,8 +72,8 @@ const BLOCK_FETCH = process.argv.includes('--block-fetch');
   page.on('pageerror', (e) => pageErrors.push(String(e)));
   page.on('requestfailed', (r) => failedReqs.push(`${r.url().slice(0, 120)} → ${(r.failure() || {}).errorText}`));
 
-  console.log(`\n=== WebKit（Safari 内核）打开 ${URL} ===`);
-  await page.goto(URL, { waitUntil: 'load', timeout: 60000 });
+  console.log(`\n=== WebKit（Safari 内核）打开 ${target} ===`);
+  await page.goto(target, { waitUntil: 'load', timeout: 60000 });
 
   // 注意：不能用「详情区可见」当完成条件 —— selectStock 一开始就把它设为可见了，
   // 响应还没回来时就已经满足，会得到「标的=—」这种假象。必须等真实数据落地。
@@ -83,5 +112,6 @@ const BLOCK_FETCH = process.argv.includes('--block-fetch');
   const ok = st.detailVisible && !st.diagVisible && st.stockName && st.stockName !== '—';
   console.log(`\n${ok ? '✅ WebKit 下可用（分析成功）' : '❌ WebKit 下不可用（已复现故障）'}`);
   await browser.close();
+  closeServer();
   process.exit(ok ? 0 : 2);
 })().catch((e) => { console.error('测试异常：', e.message); process.exit(1); });
