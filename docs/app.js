@@ -526,19 +526,26 @@ function renderDetail(d) {
 
   /* 交易计划 */
   const p = d.plan;
-  const items = [
-    ['建仓区间', p.entry?.[0] ? `${p.entry[0]} ~ ${p.entry[1]}` : '—'],
-    ['第一目标位', p.target1 ?? '—'],
-    ['第二目标位', p.target2 ?? '—'],
-    ['止损位', p.stopLoss ?? '—'],
-    ['硬止损位', p.hardStop ?? '—'],
-    ['盈亏比', p.riskReward ? p.riskReward + ' : 1' : '—'],
-    ['建议仓位上限', p.positionLimitPct + '%'],
-    ['ATR(14)', `${p.atr}（${p.atrPct}%）`],
-    ['距止损空间', p.stopLoss ? fmt(((q.price - p.stopLoss) / q.price) * 100) + '%' : '—'],
-    ['距目标空间', p.target1 ? fmt(((p.target1 - q.price) / q.price) * 100) + '%' : '—']
+  /* P3 价位口径披露：逐档来源徽标（研报 / ATR反推 / 引擎推导） */
+  const lv = p.levelLabels || {};
+  const lvBadge = (label) => {
+    if (!label) return '';
+    const cls = label === '研报' ? 'lv-report' : label === 'ATR反推' ? 'lv-auto' : 'lv-engine';
+    return `<i class="lv-badge ${cls}">${label}</i>`;
+  };
+  const rows = [
+    { k: '建仓区间', v: p.entry?.[0] ? `${p.entry[0]} ~ ${p.entry[1]}` : '—', o: lv.entry },
+    { k: '第一目标位', v: p.target1 ?? '—', o: lv.target1 },
+    { k: '第二目标位', v: p.target2 ?? '—', o: lv.target2 },
+    { k: '止损位', v: p.stopLoss ?? '—', o: lv.stopLoss },
+    { k: '硬止损位', v: p.hardStop ?? '—', o: lv.hardStop },
+    { k: '盈亏比', v: p.riskReward ? p.riskReward + ' : 1' : '—' },
+    { k: '建议仓位上限', v: p.positionLimitPct + '%' },
+    { k: 'ATR(14)', `${p.atr}（${p.atrPct}%）` },
+    { k: '距止损空间', v: p.stopLoss ? fmt(((q.price - p.stopLoss) / q.price) * 100) + '%' : '—' },
+    { k: '距目标空间', v: p.target1 ? fmt(((p.target1 - q.price) / q.price) * 100) + '%' : '—' }
   ];
-  $('#planGrid').innerHTML = items.map(([k, v]) => `<div class="pg-item"><span>${k}</span><b>${v}</b></div>`).join('')
+  $('#planGrid').innerHTML = rows.map((r) => `<div class="pg-item"><span>${r.k}${r.o ? lvBadge(r.o) : ''}</span><b>${r.v}</b></div>`).join('')
     + (p.rrNote ? `<div class="pg-item" style="grid-column:1/-1;background:var(--warn-bg);border-color:#f0e0bd"><span>盈亏比提示</span><b style="font-size:12.5px;font-weight:400;color:var(--ink-2)">${p.rrNote}</b></div>` : '');
 
   const bk = p.batchKind;

@@ -2318,13 +2318,14 @@ function buildReport(a) {
   L.push('');
   L.push(`### 2. 交易计划`);
   L.push('');
-  L.push('| 类型 | 价位 | 说明 |');
-  L.push('| --- | --- | --- |');
-  if (plan.entry?.[0]) L.push(`| 建仓区间 | ${plan.entry[0]} ~ ${plan.entry[1]} 元 | ${plan.fromProfile ? '来自投研报告给定的建仓区间' : '基于 ATR 波动率推算'}${plan.batchKind === 'exit' ? ' ⚠ 当前判定为不宜建仓，仅供回踩参考' : ''} |`);
-  L.push(`| 第一目标位 | ${plan.target1} 元 | 距现价 ${f2(((plan.target1 - q.price) / q.price) * 100)}% |`);
-  L.push(`| 第二目标位 | ${plan.target2} 元 | 距现价 ${f2(((plan.target2 - q.price) / q.price) * 100)}% |`);
-  L.push(`| 止损位 | ${plan.stopLoss} 元 | 距现价 ${f2(((q.price - plan.stopLoss) / q.price) * 100)}% |`);
-  L.push(`| 硬止损位 | ${plan.hardStop} 元 | 跌破无条件离场 |`);
+  const lv = plan.levelLabels || {};
+  L.push('| 类型 | 价位 | 说明 | 来源 |');
+  L.push('| --- | --- | --- | --- |');
+  if (plan.entry?.[0]) L.push(`| 建仓区间 | ${plan.entry[0]} ~ ${plan.entry[1]} 元 | ${plan.fromProfile ? '来自投研报告给定的建仓区间' : '基于 ATR 波动率推算'}${plan.batchKind === 'exit' ? ' ⚠ 当前判定为不宜建仓，仅供回踩参考' : ''} | ${lv.entry || '—'} |`);
+  L.push(`| 第一目标位 | ${plan.target1} 元 | 距现价 ${f2(((plan.target1 - q.price) / q.price) * 100)}% | ${lv.target1 || '—'} |`);
+  L.push(`| 第二目标位 | ${plan.target2} 元 | 距现价 ${f2(((plan.target2 - q.price) / q.price) * 100)}% | ${lv.target2 || '—'} |`);
+  L.push(`| 止损位 | ${plan.stopLoss} 元 | 距现价 ${f2(((q.price - plan.stopLoss) / q.price) * 100)}% | ${lv.stopLoss || '—'} |`);
+  L.push(`| 硬止损位 | ${plan.hardStop} 元 | 跌破无条件离场 | ${lv.hardStop || '—'} |`);
   L.push(`| 盈亏比 | ${plan.riskReward ? plan.riskReward + ' : 1' : '不适用'} | ${plan.riskReward ? (plan.riskReward >= 2 ? '风险收益比良好' : plan.riskReward >= 1 ? '风险收益比一般' : '风险大于收益，不建议参与') : (plan.rrNote || '—')} |`);
   L.push('');
   if (pf?.takeProfit?.length) {
@@ -2685,6 +2686,20 @@ function buildPlan(ind, profile, actionKey) {
     atr: r2(atr), atrPct: ind.atrPct,
     supports, resistances,
     positionLimitPct: positionPct,
+    /* P3 价位口径披露：逐档标注来源，前端/报告据此显著标识，不得混淆研报与推导值。
+       origin=true 表示该档来自投研报告给定（权威）；false 表示由引擎/ATR 推导。 */
+    levelOrigin: {
+      entry: !!L.entry, stopLoss: !!L.stopLoss, hardStop: !!L.hardStop,
+      target1: L.target1 != null, target2: L.target2 != null
+    },
+    levelLabels: (() => {
+      const isAutoProfile = !!profile?.auto;
+      const tag = (fromReport) => fromReport ? '研报' : (isAutoProfile ? 'ATR反推' : '引擎推导');
+      return {
+        entry: tag(!!L.entry), stopLoss: tag(!!L.stopLoss), hardStop: tag(!!L.hardStop),
+        target1: tag(L.target1 != null), target2: tag(L.target2 != null)
+      };
+    })(),
     fromProfile: !!(L.entry || L.stopLoss) && !profile?.auto,
     levelsSource: (!profile?.auto && (L.entry || L.stopLoss)) ? 'profile' : 'derived',
     canEnter: batchKind !== 'exit',
@@ -2978,7 +2993,7 @@ async function analyze(code, opts = {}) {
   };
 }
 
-module.exports = { analyze, getProfile, ACTIONS, profilesData };
+module.exports = { analyze, getProfile, ACTIONS, profilesData, buildPlan, decideAction };
 
 });
 
