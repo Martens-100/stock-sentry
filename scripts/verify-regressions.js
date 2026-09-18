@@ -104,13 +104,13 @@ check('阻力位密集时，两档目标位间距 ≥ 1.2×ATR',
 
 /* 5. 不过度修正：间距本就充足时，必须沿用真实阻力位 */
 const normal = SUPPORTS.concat([
-  { price: 41.2, side: 'resistance' },
-  { price: 45.0, side: 'resistance' }
+  { price: 45.0, side: 'resistance' },
+  { price: 50.0, side: 'resistance' }
 ]);
 const nLv = portrait.deriveLevels(indOf(normal, 40, 1));
 check('间距充足时沿用真实阻力位（不被过度修正）',
-  nLv.target2 === 45,
-  `target1=${nLv.target1} target2=${nLv.target2}（期望 45）`);
+  nLv.target1 === 45 && nLv.target2 === 50,
+  `target1=${nLv.target1} target2=${nLv.target2}（期望 45 / 50）`);
 
 /* 6. 目标位不低于现价 1.2×ATR（既有防护，守卫不回归） */
 check('第一目标位与现价保持 ≥ 1.2×ATR 距离',
@@ -129,6 +129,34 @@ console.log('\n===== 回归测试 · 坏数据不得产生倒挂价位 =====');
     ordered,
     `entry=[${lv.entry}] stop=${lv.stopLoss} hard=${lv.hardStop}`);
 });
+
+/* ================================================================== */
+console.log('\n===== 回归测试 · P4 贴脸阈值 + 架构核验 =====');
+/* ================================================================== */
+
+/* 10. 贴脸阈值：第一目标位 ≥ max(3×ATR, 6% 现价)，且 6% 下限约束生效 */
+const flat = SUPPORTS.concat([{ price: 101, side: 'resistance' }, { price: 102, side: 'resistance' }]);
+const fLv = portrait.deriveLevels(indOf(flat, 100, 1));
+const floor100 = Math.max(3 * 1, 100 * 0.06);
+check('P4 贴脸阈值：第一目标位 ≥ max(3×ATR, 6%)', fLv.target1 - 100 >= floor100 - 1e-9, `target1=${fLv.target1} 阈值=${floor100}`);
+check('P4 贴脸阈值由 6% 下限约束（atr*4=4 < 6，floor 生效）', Math.abs(fLv.target1 - (100 + floor100)) < 1e-6, `target1=${fLv.target1} 期望=${100 + floor100}`);
+
+/* 11. 低波动时取 6% 下限（3×ATR=1.5 < 3），确保目标位有真实上行空间 */
+const flat2 = SUPPORTS.concat([{ price:51, side:'resistance' }, { price:52, side:'resistance' }]);
+const fLv2 = portrait.deriveLevels(indOf(flat2, 50, 0.5));
+check('P4 贴脸阈值：低波动取 6% 下限（3×ATR=1.5 < 3）', Math.abs(fLv2.target1 - 53) < 1e-6, `target1=${fLv2.target1} 期望 53`);
+
+/* 12. 架构核验：auto 派生价位按当前价反推、与现价维持固定偏移，
+        即便强行接入 decideAction（L=d）也永远触发不了止盈——证明 P4「放开 auto 参与风控」
+        不能靠 decideAction 实现，auto 实时风控由 monitors 系统承接。 */
+function simAutoAboveT1(price) {
+  const ind = { price, atr: 1, keyLevels: [{ price: 108, side: 'resistance', count: 1 }], ma: { ma5: price, ma10: price, ma20: price, ma30: price, ma60: price, ma120: price } };
+  const d = portrait.deriveLevels(ind);
+  return price >= (d.target1 || 0); // 模拟 naive P4：L = d
+}
+let everFired = false;
+for (let p = 100; p <= 112; p += 1) if (simAutoAboveT1(p)) everFired = true;
+check('P4 架构核验：auto 派生价位接入 decideAction 后永远不触发止盈（需 monitors 承接）', !everFired, everFired ? '错误：naive L=d 竟触发' : 'naive L=d 全程 aboveT1=false');
 
 /* ================================================================== */
 console.log(`\n通过 ${pass} 项，失败 ${fail} 项`);

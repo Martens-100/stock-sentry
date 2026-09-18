@@ -1417,10 +1417,15 @@ function deriveLevels(ind) {
   const stopLoss = r2(P - atr * 2.5);
   const hardStop = r2(P - atr * 3.5);
 
-  // 目标位与现价保持 ≥1.2×ATR 距离，避免"贴脸"目标导致盈亏比失真
-  const minTgtDist = atr * 1.2;
+  /* 贴脸阈值：第一目标位必须距离现价足够远，才有止盈决策意义。
+     原 1.2×ATR（约 1–3%）过小——自动画像标的现价涨 1–3% 就会在交易计划卡里出现一个
+     "近在咫尺"的目标位，误导用户以为已临近止盈；且 auto 派生价位是按当前价反推的，
+     与现价始终维持固定偏移，无法作为"价格触达即止盈"的硬触发（详见 engine.decideAction 注释）。
+     现取 max(3×ATR, 6% 现价) 下限，确保目标位至少对应 6% 以上的真实上行空间，与投研口径可比。 */
+  const tgtFloor = Math.max(atr * 3, P * 0.06);
+  const minTgtDist = tgtFloor;
   const farRes = resistances.filter((r) => r.price >= P + minTgtDist);
-  const target1 = farRes[0]?.price ?? r2(P + atr * 4);
+  const target1 = farRes[0]?.price ?? r2(P + Math.max(atr * 4, tgtFloor));
   /**
    * 第二目标位须与第一目标位保持最小间距。
    *
@@ -1429,7 +1434,7 @@ function deriveLevels(ind) {
    * 「第一目标位减 1/3、第二目标位再减 1/3」会变成同一价位分两次卖，
    * 分批止盈失去区分度、看起来像笔误。
    *
-   * 现要求至少远 1.2×ATR（与 minTgtDist 同口径），不满足则退回 target1 + 3×ATR。
+   * 现要求至少远 1.2×ATR（minTgtGap，独立于上面的贴脸阈值 tgtFloor），不满足则退回 target1 + 3×ATR。
    * 注意：这里的 target1/target2 是引擎推导值；研报给定的价位在 engine.buildPlan
    * 里另有口径（不适用本约束，避免改写投研权威值）。
    */
@@ -2532,8 +2537,13 @@ function adaptForNoPosition(action) {
 
 function decideAction({ composite, techScore, profileScore, ind, profile, signals }) {
   const P = ind.price;
-  /* 与 rules.profileRules 保持一致：自动画像的价位是 ATR 反推，不能参与风控判定，
-     否则会与现价"贴脸"造出虚假的止损/目标信号 */
+  /* 自动画像的价位是否参与硬性风控判定：
+     自动画像的 stopLoss/target 由 portrait.deriveLevels 按「当前价 + ATR 偏移」反推，
+     而 deriveLevels 每次分析都用最新价重算 —— 因此这些价位与现价始终维持固定偏移，
+     无法作为"价格触达即触发"的硬止损/目标信号（实测：价格逐档上行时 target1 始终比
+     现价高一个 floor，aboveT1 永远为 false，详见 feat/p4 验证）。
+     自动画像的实时风控由 monitors 系统承接（MA20 / Donchian / Bollinger 等按 K 线固定
+     参考位判定，能真实触发）。故此处对 auto 置空 L，仅投研画像的静态价位参与硬性风控。 */
   const L = profile?.auto ? {} : (profile?.levels || {});
   const reasons = [];
   let action;
@@ -2596,7 +2606,7 @@ function buildPlan(ind, profile, actionKey) {
   const entryHi = L.entry?.[1] ?? d.entry[1];
   const stopLoss = L.stopLoss ?? d.stopLoss;
   const hardStop = L.hardStop ?? d.hardStop;
-  // 目标位已在 deriveLevels 内保证与现价保持 ≥1.2×ATR 距离，避免"贴脸"导致盈亏比失真
+  // 派生目标位已在 deriveLevels 内保证与现价保持 ≥ 贴脸阈值（max(3×ATR, 6% 现价)）距离，避免"贴脸"导致盈亏比失真
   const target1 = L.target1 ?? d.target1;
   let target2 = L.target2 ?? d.target2;
   /* 职责分工：此处只防"倒挂"（target2 不高于 target1），不做最小间距约束。
