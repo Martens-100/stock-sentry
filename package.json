@@ -3,11 +3,14 @@
   "version": "1.1.0",
   "description": "StockSentry · A股智能盯盘与投研报告自动生成系统",
   "main": "server.js",
+  "sentryConfig": {
+    "staticOutDir": "docs"
+  },
   "scripts": {
     "start": "node server.js",
     "build:static": "node build-static.js",
     "check:secrets": "node scripts/scan-secrets.js",
-    "check": "node scripts/scan-secrets.js && node scripts/verify-provenance-selftest.js && node scripts/verify-provenance-contract.js --ratchet && node scripts/verify-indicator-correctness.js && node build-static.js",
+    "check": "node scripts/scan-secrets.js && node scripts/verify-provenance-selftest.js && node scripts/verify-provenance-contract.js --ratchet && node scripts/verify-indicator-correctness.js && node build-static.js && node scripts/verify-no-shadow-config.js",
     "verify:browser": "node scripts/verify-browser-path.js",
     "verify:ui": "node scripts/verify-ui-dom.js",
     "verify:provenance": "node scripts/verify-provenance-contract.js --ratchet",
@@ -15,6 +18,7 @@
     "verify:provenance-selftest": "node scripts/verify-provenance-selftest.js",
     "verify:indicator-correctness": "node scripts/verify-indicator-correctness.js",
     "verify:oracle": "node scripts/verify-oracle-anchoring.js",
+    "verify:no-shadow-config": "node scripts/verify-no-shadow-config.js",
     "verify:all": "node scripts/scan-secrets.js && node scripts/verify-provenance-selftest.js && node scripts/verify-provenance-contract.js --ratchet && node scripts/verify-indicator-correctness.js && node scripts/verify-oracle-anchoring.js && node build-static.js"
   },
   "keywords": [

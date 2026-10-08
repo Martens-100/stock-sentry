@@ -11,7 +11,14 @@ const { scanPath } = require('./scripts/scan-secrets');
 
 const ROOT = __dirname;
 const PUB = path.join(ROOT, 'public');
-const OUT = path.join(ROOT, 'docs');
+/* 输出目录的**单一声明处**：package.json 的自定义字段。
+   ⚠️ 不要用 pkg.browser / pkg.directories —— 这两个在 npm 规范里有各自语义
+   （前者是模块路径替换映射，后者是文档目录），拿它们当产物目录属范畴错误；
+   而本项目并未声明这两个字段，写成 `pkg.directories?.doc || './dist'`
+   会静默回落到 ./dist，产物不再更新 docs/，GitHub Pages 停在旧版本。 */
+const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+const OUT_REL = (PKG.sentryConfig && PKG.sentryConfig.staticOutDir) || 'docs';
+const OUT = path.join(ROOT, OUT_REL);
 
 /**
  * 打包清单（顺序仅影响末尾 window.SentryLib 的求值顺序，模块本身是惰性 __define）。
@@ -22,6 +29,7 @@ const OUT = path.join(ROOT, 'docs');
  * 一旦有浏览器侧代码 require('config')，构建期的「模块引用闸门」会直接报错。
  */
 const MODULES = [
+  ['net-params', 'lib/net-params.js'],   // 模块名必须等于文件名：require('./net-params') 改写后就是这个字符串
   ['source', 'lib/source.js'],
   ['provenance', 'lib/provenance.js'],
   ['tech', 'lib/tech.js'],

@@ -28,6 +28,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const { execFileSync } = require('child_process');
+const { viewportsFor } = require('./lib/breakpoints');
 
 const ROOT = path.join(__dirname, '..');
 const DOCS = path.join(ROOT, 'docs');
@@ -163,20 +164,24 @@ const PROBE = `(() => {
   return out;
 })()`;
 
-async function pixelCheck(pw, url) {
+/* 视口矩阵由 CSS 断点推导，不在本文件里写死。
+   断点一改，测试视口自动跟着变 —— 这是「派生值必须从规范推导」的实例。 */
+const VIEWPORTS = viewportsFor(path.join(ROOT, 'public/style.css'));
+
+async function pixelCheck(pw, url, viewports = VIEWPORTS) {
   const browser = await pw.webkit.launch();
   try {
-    const wide = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-    await wide.goto(url, { waitUntil: 'load', timeout: 45000 }).catch(() => {});
-    await wide.waitForTimeout(6000);
-    const rWide = await wide.evaluate(PROBE);
-
-    const narrow = await browser.newPage({ viewport: { width: 360, height: 780 } });
-    await narrow.goto(url, { waitUntil: 'load', timeout: 45000 }).catch(() => {});
-    await narrow.waitForTimeout(6000);
-    const rNarrow = await narrow.evaluate(PROBE);
-
-    return { rWide, rNarrow };
+    const results = [];
+    for (const v of viewports) {
+      const page = await browser.newPage({ viewport: { width: v.width, height: v.height } });
+      await page.goto(url, { waitUntil: 'load', timeout: 45000 }).catch(() => {});
+      await page.waitForTimeout(6000);
+      results.push({ viewport: v, r: await page.evaluate(PROBE) });
+      await page.close();
+    }
+    /* 最宽 / 最窄仍单独返回，供 V4 / V5 的既有断言使用 —— 不改动基线里的 V-ID 集合 */
+    const byW = [...results].sort((a, b) => b.viewport.width - a.viewport.width);
+    return { results, rWide: byW[0].r, rNarrow: byW[byW.length - 1].r };
   } finally {
     await browser.close();
   }
@@ -201,7 +206,7 @@ async function V4V5(port) {
 
   if (pw) {
     try {
-      const { rWide, rNarrow } = await pixelCheck(pw, url);
+      const { rWide, rNarrow, results } = await pixelCheck(pw, url);
       method = 'pixel';
       PIXELS.method = 'pixel';
       PIXELS.wide = rWide.canvases;
@@ -214,17 +219,26 @@ async function V4V5(port) {
           'PASS(像素) 宽视口画布 ' + rWide.canvases.length + ' 个，有墨迹 ' + inked(rWide)
           + ' 个 | ' + fmt(rWide));
 
-      /* V5：窄视口下"不产生空图"有两种合格形态 ——
-         ① 画布仍有墨迹；② 画布无墨迹但给出了人话提示（有交代的空）。
-         不可接受的只有一种：画布有尺寸、无墨迹、且无任何提示（静默空白）。 */
+      /* V5：**任何**断点分支下都不允许"静默空白"。
+         合格形态有两种 —— ① 画布仍有墨迹；② 无墨迹但给出了人话提示（有交代的空）。
+         不可接受的只有一种：画布有尺寸、无墨迹、且无任何提示。
+         这里遍历**全部派生视口**而非只看最窄：620–1200 的平板区间此前从未被测，
+         恰恰是最容易漏掉布局塌陷的地方。 */
+      const silentAt = [];
+      for (const { viewport: v, r } of results) {
+        const hasInk = inked(r) > 0, hasHint = r.hints.length > 0;
+        if (r.canvases.length > 0 && !hasInk && !hasHint) silentAt.push(v.width + '(' + v.why + ')');
+      }
       const narrowHasInk = inked(rNarrow) > 0;
       const narrowHasHint = rNarrow.hints.length > 0;
       const narrowSilentBlank = rNarrow.canvases.length > 0 && !narrowHasInk && !narrowHasHint;
-      rec('V5', '窄视口不产生空图', narrowSilentBlank ? 'FAIL' : 'PASS',
+      rec('V5', '窄视口不产生空图', (narrowSilentBlank || silentAt.length) ? 'FAIL' : 'PASS',
           'PASS(像素) 窄视口画布 ' + rNarrow.canvases.length + ' 个，有墨迹 ' + inked(rNarrow)
           + '，提示语 ' + (narrowHasHint ? '命中[' + rNarrow.hints.join('/') + ']' : '未命中')
           + (narrowSilentBlank ? ' ⚠️ 静默空白！' : '')
-          + ' | ' + fmt(rNarrow));
+          + ' | 全视口 ' + results.length + ' 个：'
+          + results.map(({ viewport: v, r }) => v.width + ':' + inked(r)).join(' ')
+          + (silentAt.length ? ' ⚠️ 静默空白 ' + silentAt.join(',') : ''));
       return;
     } catch (e) {
       console.log('  · Playwright 已加载但执行失败：' + String(e.message).split('\n')[0]);

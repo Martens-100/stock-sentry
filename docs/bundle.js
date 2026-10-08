@@ -20,6 +20,51 @@ function __require(name) {
 
 var PROFILES_DATA = {"version":"1.0.0","template":{"source":"中兴投研持仓攻略.docx / 科伦药业投研尽调报告(pdf)","team":["二级市场投研","一级市场产业研究","Risk Consulting","芯片组专研","战略分析"],"sections":[{"id":"summary","no":"一","title":"执行摘要（Executive Summary）","hint":"战略转型定位 + 核心矛盾 + 关键拐点"},{"id":"fundamental","no":"二","title":"财务与估值透视","hint":"财务基本面 + 估值水平 + 边际改善"},{"id":"business","no":"三","title":"经营与市占率拆解","hint":"核心业务分拆 + 经营隐忧"},{"id":"risk","no":"四","title":"风险控制（Risk Consulting）","hint":"合规与治理排雷"},{"id":"chips","no":"五","title":"长线投资者：筹码结构与散户拥挤度","hint":"股东户数 + 机构持仓 + 资金博弈"},{"id":"verdict","no":"六","title":"团队综合研判","hint":"好的一面 / 坏的一面 / 核心结论"},{"id":"chain","no":"七","title":"产业链与业绩兑现节奏","hint":"产业链传导 + 业绩兑现时间表"},{"id":"strategy","no":"八","title":"持仓攻略：策略建议与操作纪律","hint":"建仓区间 / 止盈 / 止损 / 仓位 / 监控清单"}],"monitorModel":{"note":"利好/利空双向监控清单，源自两份报告的核心跟踪指标表","fields":["dim 跟踪维度","metric 关键指标","window 观察窗口","bull 利好信号","bear 利空信号","weight 权重(1-10)"]}},"profiles":{"000063":{"code":"000063","market":"sz","name":"中兴通讯","tags":["AI算力","通信设备","自研芯片","超节点"],"sourceDoc":"中兴投研持仓攻略(1).docx","reportDate":"2026-08-14","thesis":"市场仍用『通信设备商』旧框架给估值（PE约37倍），但公司实质已演变为『芯片+算力基础设施+AI终端』的全栈AI玩家：算力营收占比从2025年24.6%升至2026Q1的27%，中兴微电子（GPU/CPU/DPU/交换芯片全品类）中性估值1900-2400亿元已接近母公司全部市值。","moat":"7nm/5nm Chiplet；51.2T交换芯片国内率先商用；OEX正交电交换超节点单机柜128 GPU、Scale-up至1.6万卡。","valuation":{"peTtm":37,"pb":2.24,"fairPe":[26,37],"benchmark":"海光信息 PE≈276倍，公司估值被显著压制","note":"若市场认可AI芯片身份，仅中兴微电子一项资产即接近母公司当前总市值。"},"levels":{"entry":[32,35],"addOn":[30,32],"stopLoss":30,"hardStop":28,"target1":42,"target2":50,"positionLimit":0.15},"cost":null,"catalysts":[{"time":"2026H1","event":"字节ASIC首批交付、阿里JDM持续供货、移动AI推理服务器交付","amount":"约200亿元","impact":"算力收入确认加速，毛利率仍爬坡"},{"time":"2026Q3","event":"凌云51.2T批量外供头部云厂、定海DPU放量、珠峰1.0批量应用","amount":"芯片外销启动","impact":"高毛利芯片贡献利润，毛利率拐点出现"},{"time":"2026Q4","event":"全年订单集中确认、海外大单交付、AI终端旺季","amount":"约150-200亿元","impact":"利润弹性最大季度"},{"time":"2027+","event":"凌云102.4T流片、算力芯片外销占比提升、AI智能体手机规模化","amount":"持续增长","impact":"估值从通信股切换为AI算力核心设备股"}],"businessMix":[{"name":"运营商网络","share":46,"trend":"承压","note":"5G基站/核心网全球第二；三大运营商2026资本开支约2596亿元，同比再降9%"},{"name":"政企/算力","share":27,"trend":"快速提升","note":"2025算力营收同比+150%；服务器及存储同比+200%；已进入阿里/腾讯/字节/百度等核心场景"},{"name":"消费者业务","share":27,"trend":"增长","note":"手机国内国际双位数增长；努比亚NaviX Ultra搭载豆包手机助手"}],"monitors":[{"dim":"芯片放量","metric":"凌云51.2T外销数量","window":"2026Q3起","bull":"季度外销超1万片","bear":"外销延迟或低于5000片","weight":10,"auto":null},{"dim":"毛利率","metric":"综合毛利率","window":"季报","bull":"回升至32%以上","bear":"持续低于28%","weight":9,"auto":"grossMargin"},{"dim":"算力占比","metric":"算力产品营收占比","window":"季报","bull":"持续超30%","bear":"回落至25%以下","weight":8,"auto":"segmentShare"},{"dim":"客户拓展","metric":"互联网大厂订单金额","window":"公告/调研","bull":"字节/阿里/腾讯订单超百亿","bear":"头部客户订单流失","weight":8,"auto":null},{"dim":"地缘政治","metric":"欧盟清退法案进展","window":"持续跟踪","bull":"无新增制裁","bear":"新增清退或次级制裁","weight":7,"auto":null},{"dim":"筹码结构","metric":"股东户数变化","window":"每月","bull":"股东户数不再增加甚至减少","bear":"户数持续增加、机构继续减仓","weight":6,"auto":"chipConcentration"},{"dim":"业绩拐点","metric":"单季归母净利润同比","window":"季报","bull":"同比增速转正","bear":"降幅扩大超30%","weight":9,"auto":"profitGrowth"}],"fundamentals":{"revenue2025":"1338.96亿元(+10.38%)","netProfit2025":"56.18亿元(-33.32%)","revenueQ1_2026":"349.88亿元(+6.13%)","netProfitQ1_2026":"13.10亿元(-46.58%)","grossMarginQ1_2026":"28.28%(-6pct)","cashFlowQ1_2026":"经营活动现金流净额-19.79亿元","receivables":"应收账款248.49亿元","consensus2026":"机构预测2026年净利润56.81-74.96亿元"},"chips":"股东总数620,363户（2026-07-20），A股620,081户，较1月增加约1万户；人均流通股约6495股（-7.25%）；北向资金1.14%（较上期减少887.54万股）；沪深300ETF普遍减仓。结论：散户拥挤度高、机构态度谨慎。","risks":["业绩不及预期：运营商投资下滑超预期或算力毛利率爬坡慢，2026净利润可能低于56亿元","地缘政治黑天鹅：美国次级制裁、7nm代工受限、欧盟清退加速","芯片量产风险：凌云51.2T批量外供延迟、客户验证不及预期","市场竞争：华为昇腾/鲲鹏生态扩张、海光DCU迭代加速","估值重构失败：市场长期固守通信设备商标签"],"verdictNote":"当前（A股35元附近）风险大于机会，等待2026年下半年业绩拐点确认后再布局。"},"002422":{"code":"002422","market":"sz","name":"科伦药业","tags":["大输液龙头","创新药ADC","合成生物"],"sourceDoc":"科伦药业投研尽调报告（深桑达A投研持仓.docx(1).pdf 内文）","reportDate":"2026-08-08","thesis":"『传统业务（大输液+抗生素）托底、创新业务（科伦博泰ADC）突围』双轮驱动。科伦博泰已成为全球ADC第一梯队，芦康沙妥珠单抗实现全球首例ADC+IO一线NSCLC III期成功，与默沙东合作总交易金额超110亿美元。","moat":"大输液行业绝对龙头（2004年至今国内第一）；科伦博泰OptiDC平台；川宁生物合成生物学首批交付企业。","valuation":{"peTtm":46,"pb":2.93,"fairPe":[28,32],"benchmark":"医药板块平均28-32倍，行业中值38.6倍","note":"当前46倍已充分反映ADC全球化+传统筑底双主题；若H2创新药放量不及预期，存在向30倍动态PE修复压力。"},"levels":{"entry":[38,40],"addOn":[38,40],"stopLoss":40,"hardStop":38,"target1":52,"target2":58,"positionLimit":0.12},"cost":45.44,"takeProfit":[{"level":"第一止盈位（动态）","range":[50,52],"note":"对应PE(TTM)约50-53倍，接近前期高点压力区；若反弹至此区间且成交量萎缩，减仓1/3"},{"level":"第二止盈位（乐观）","range":[55,58],"note":"机构目标价上沿；放量突破可再减仓1/3，保留底仓"}],"catalysts":[{"time":"2025-2026H1","event":"业绩低谷期：大输液需求回落、抗生素价格下行、创新药投入期","amount":"-","impact":"净利润连续大幅下滑"},{"time":"2026H2-2027","event":"筑底复苏期：高端输液占比提升、创新药医保放量、抗生素营收企稳","amount":"-","impact":"净利润降幅收窄或转正"},{"time":"2027+","event":"高增释放期：海外适应症获批、合成生物规模化、大输液结构升级完成","amount":"-","impact":"净利润重回中高速增长，估值切换"}],"businessMix":[{"name":"大输液","share":40,"trend":"周期筑底","note":"2025销量39.86亿瓶/袋、收入74.84亿元(-16.02%)；粉液双室袋+39.39%、三腔袋+30.90%逆势高增"},{"name":"非输液制剂","share":22,"trend":"集采影响趋稳","note":"2025收入40.36亿元(-3.20%)；2026版基药目录新增35个产品（累计157个）"},{"name":"抗生素中间体(川宁生物)","share":24,"trend":"周期触底","note":"2025收入44.97亿元(-23.20%)；Q3/Q4环比+3.40%、+8.54%触底回升"},{"name":"科伦博泰(创新药)","share":3,"trend":"爆发前夜","note":"2025药品销售收入5.43亿元(+949.8%)；Sac-TMT国内获批4项适应症、2项已纳入医保"}],"monitors":[{"dim":"业绩验证","metric":"半年报/三季报营收与毛利率","window":"2026-08下旬 / 10月","bull":"营收增速转正，毛利率止跌回升","bear":"营收继续下滑，毛利率继续下降","weight":10,"auto":"revenueGrowth"},{"dim":"创新药放量","metric":"科伦博泰季度药品销售收入","window":"季报","bull":"季度环比高增、新增适应症获批","bear":"销售不及预期、临床失败","weight":9,"auto":null},{"dim":"川宁生物","metric":"抗生素中间体价格 / 合成生物收入","window":"季报","bull":"抗生素价格回升、合成生物收入放量","bear":"价格继续下跌、产能利用率不足","weight":7,"auto":null},{"dim":"筹码/资金","metric":"股东户数 / 融资余额","window":"每月","bull":"筹码集中、融资余额稳定","bear":"散户化严重、融资大幅流出","weight":6,"auto":"chipConcentration"},{"dim":"机构评级","metric":"券商评级与目标价","window":"持续跟踪","bull":"新增买入评级、目标价上调","bear":"评级下调、盈利预测下调","weight":6,"auto":null},{"dim":"大股东/管理层","metric":"增减持与回购","window":"公告","bull":"增持或回购","bear":"大股东减持、高管离职","weight":6,"auto":null},{"dim":"估值","metric":"PE(TTM)分位","window":"每日","bull":"回落至35倍以下（安全边际提升）","bear":"突破50倍（透支预期）","weight":7,"auto":"valuationPE"}],"fundamentals":{"revenue2025":"185.13亿元(-15.13%)","netProfit2025":"17.02亿元(-42.03%)","revenueQ1_2026":"42.59亿元(-2.98%)","netProfitQ1_2026":"4.54亿元(-22.34%)","grossMargin2025":"47.85%(-3.84pct)","grossMarginQ1_2026":"45.31%(-6.89pct)","cashFlow2025":"经营现金流净额26.42亿元(-41.19%)","cashFlowQ1_2026":"2.5亿元(-44.45%)","roe":"7.24%（2025）","debtRatio":"27.70%","receivables":"应收账款/利润比值达274.58%","consensus2026":"东吴证券预测2026年EPS 1.21元；机构预期净利润18.14亿元"},"chips":"股东户数约7.04万户（2026-03），较上期减少1.37%，人均流通股16154股(+1.39%)，筹码略有集中。融资余额约9.4亿元，杠杆资金参与度高；8月7日大涨6.89%成交20.18亿元、换手3.49%。评级：短线博弈资金活跃，长线资金尚未稳固锁定。","risks":["大输液需求持续萎缩：医保控费、门诊输液限制、传染病发病率下降","集采降价压力：仿制药利润空间持续压缩","川宁生物周期波动：抗生素中间体价格受全球供需影响","科伦博泰盈利不确定性：销售绝对值仍小(5.43亿)，研发费用高企","应收账款高企：应收/利润比值274.58%，回款风险","治理讨论：董事长个人IP过度绑定"],"verdictNote":"45.44元成本处于盈亏平衡带，向上需2026H2业绩验证，向下面临估值回调与业绩恶化双重压力。建议『谨慎持有+严格止盈止损』，仓位控制在总资产8%-12%。"},"000032":{"code":"000032","market":"sz","name":"深桑达A","tags":["信创","云计算","中国电子系"],"sourceDoc":"文件名标注“深桑达A投研持仓”，但PDF正文为科伦药业内容（模板沿用）","profileQuality":"low","reportDate":null,"thesis":"【待完善】该标的画像尚未从投研文档中提取到有效内容——所提供 PDF 文件名为『深桑达A投研持仓』，但正文实为科伦药业（002422）的尽调报告。当前按通用模板生成监控规则，建议补充该股专项研报后回填画像。","moat":"【待补充】","valuation":{"peTtm":null,"pb":null,"fairPe":[25,40],"benchmark":"行业均值","note":"画像缺失，估值判断以实时PE与行业分位为准。"},"levels":{"entry":null,"addOn":null,"stopLoss":null,"hardStop":null,"target1":null,"target2":null,"positionLimit":0.08},"cost":null,"catalysts":[{"time":"待补充","event":"需补充该股业务与订单节点","amount":"-","impact":"-"}],"businessMix":[],"monitors":[{"dim":"估值","metric":"PE(TTM)分位","window":"每日","bull":"回落至行业均值下方","bear":"显著高于行业均值","weight":7,"auto":"valuationPE"},{"dim":"筹码结构","metric":"股东户数变化","window":"每月","bull":"筹码集中","bear":"散户化严重","weight":6,"auto":"chipConcentration"},{"dim":"业绩验证","metric":"季报营收与毛利率","window":"季报","bull":"营收增速转正、毛利率回升","bear":"营收下滑、毛利率下降","weight":9,"auto":"revenueGrowth"},{"dim":"机构评级","metric":"券商评级与目标价","window":"持续跟踪","bull":"新增买入评级、目标价上调","bear":"评级下调","weight":6,"auto":null}],"fundamentals":{},"chips":"【待补充】","risks":["画像缺失：本标的未从投研文档中提取到有效基本面信息，策略建议仅供参考"],"verdictNote":"画像缺失，仅依据实时技术与估值数据给出信号，建议补充专项研报。"}}};
 
+/* ===== lib/net-params.js ===== */
+__define('net-params', function (module, exports, require) {
+'use strict';
+/**
+ * 网络参数 —— 双端同构的唯一声明处
+ * ================================
+ *
+ * 为什么单独一个文件，而不放进 lib/config.js
+ * ------------------------------------------
+ * lib/config.js 是**凭据入口**，被构建脚本有意排除在浏览器产物之外：
+ *   · build-static.js 的 MODULES 里没有它；
+ *   · 浏览器侧一旦引用 config 模块，「模块引用闸门」会直接报错；
+ *   · lib/source.js 里对 cfg 的引用整个包在 @node-only 区块内，打包时被剥离。
+ * 而 lib/source.js 是 Node / 浏览器双端同构模块，它的超时参数在两端都要生效。
+ * 所以超时参数**不能**放 config.js —— 放进去在浏览器侧会拿不到值。
+ *
+ * 因此本文件的硬约束：
+ *   1. 不得 require 任何 Node 内置模块（fs / https / zlib 等）；
+ *   2. 不得在运行时读取环境变量（浏览器侧没有这一层）；
+ *   3. 只能包含纯字面量常量。
+ * 违反任意一条都会让静态产物在浏览器里崩掉，而构建期的模块引用闸门未必拦得住。
+ *
+ * ⚠️ 书写注意：本文件的注释会被原样打进 docs/bundle.js，而构建后的密钥扫描
+ *    会在产物里匹配敏感字面量。所以这里**不要**把敏感 API 名字原样写进注释 ——
+ *    扫描器不区分注释与代码，命中即中止构建。用中文描述代替字面量。
+ *
+ * 之前的问题：这些值以裸字面量的形式散落在 source.js 的多个函数签名里
+ * （9000 出现 6 次、6000 出现 3 次）。改一处漏几处 → 不同数据源超时彼此不一致，
+ * 且没有任何报错。现在收敛到此处，由 scripts/verify-no-shadow-config.js
+ * 断言消费侧不再出现裸字面量。
+ */
+module.exports = {
+  /** 普通行情接口超时（腾讯 / 新浪 JSONP） */
+  API_TIMEOUT_MS: 9000,
+  /** 快速失败型短超时：东方财富（仅 Node 可达）与搜索联想接口。
+   *  这两类请求失败后都有备选路径，不必长时间等待。 */
+  FAST_TIMEOUT_MS: 6000,
+  /** 搜索联想：输入即触发，对延迟最敏感，超时需明显短于普通行情 */
+  SUGGEST_TIMEOUT_MS: 4000,
+  /** 重定向跟随上限 */
+  MAX_REDIRECTS: 3,
+};
+
+});
+
 /* ===== lib/source.js ===== */
 __define('source', function (module, exports, require) {
 'use strict';
@@ -30,6 +75,10 @@ __define('source', function (module, exports, require) {
  * 内置 TTL 缓存，避免高频轮询触发限流。
  */
 const IS_NODE = typeof process !== 'undefined' && !!(process.versions && process.versions.node);
+
+/* 网络参数：双端同构常量，浏览器产物里同样存在（与 @node-only 的 cfg 不同）。
+   超时值一律从这里取，不得在函数签名里再写裸字面量。 */
+const NP = require('net-params');
 
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -54,7 +103,7 @@ function withTimeout(promise, ms, label, onTimeout) {
  */
 const transport = { fetchOk: 0, fetchFail: 0, jsonpOk: 0, jsonpFail: 0, lastTransport: '', lastError: '' };
 
-function request(url, { headers = {}, timeout = 9000 } = {}) {
+function request(url, { headers = {}, timeout = NP.API_TIMEOUT_MS } = {}) {
   // UA / Referer 在浏览器里属于 forbidden header，会被静默丢弃且毫无作用；
   // 只在 Node 侧带上，避免给 CORS 请求引入无意义的头。
   const h = IS_NODE ? { 'User-Agent': UA, 'Accept': '*/*', ...headers } : { 'Accept': '*/*' };
@@ -94,7 +143,7 @@ function request(url, { headers = {}, timeout = 9000 } = {}) {
  * 注意：脚本以「响应头声明的字符集」解码（qt 为 GBK、ifzq 为 UTF-8），
  * 所以走这条路反而绕开了 TextDecoder('gbk') 的浏览器兼容性问题。
  */
-function jsonp(url, varName, timeout = 9000) {
+function jsonp(url, varName, timeout = NP.API_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     if (typeof document === 'undefined') return reject(new Error('当前环境不支持 JSONP'));
     const script = document.createElement('script');
@@ -125,7 +174,7 @@ const splitTx = (txParam) => String(txParam).split(',')
   .map((s) => s.trim()).filter((tx) => /^[a-z]{2}\d{6}$/.test(tx));
 
 /** 腾讯 JSONP 通道：逐只取回全局变量 v_xxNNNNNN，再还原成与 fetch 相同的文本形态 */
-async function txSnapshotJsonp(txParam, timeout = 9000) {
+async function txSnapshotJsonp(txParam, timeout = NP.API_TIMEOUT_MS) {
   const list = splitTx(txParam);
   const parts = await Promise.all(list.map(async (tx) => {
     const v = await jsonp(`https://qt.gtimg.cn/q=${tx}`, `v_${tx}`, timeout);
@@ -145,7 +194,7 @@ async function txSnapshotJsonp(txParam, timeout = 9000) {
  * 无需回调名参数；响应头声明 GB18030，浏览器按该字符集解码，中文名不会乱码。
  * 实测不带 Referer 也返回 200（历史上曾要求 Referer，故保留失败即降级的设计）。
  */
-async function sinaSnapshotJsonp(txParam, timeout = 9000) {
+async function sinaSnapshotJsonp(txParam, timeout = NP.API_TIMEOUT_MS) {
   const list = splitTx(txParam);
   const parts = await Promise.all(list.map(async (tx) => {
     const v = await jsonp(`https://hq.sinajs.cn/list=${tx}`, `hq_str_${tx}`, timeout);
@@ -158,7 +207,7 @@ async function sinaSnapshotJsonp(txParam, timeout = 9000) {
 }
 
 /** 快照文本（v_xxNNNNNN="..."）：fetch 失败时逐只改用 JSONP 取回并还原成同样的文本形态 */
-async function txSnapshotText(txParam, timeout = 9000) {
+async function txSnapshotText(txParam, timeout = NP.API_TIMEOUT_MS) {
   try {
     return gbk(await request(`https://qt.gtimg.cn/q=${txParam}`, { timeout }));
   } catch (firstErr) {
@@ -173,7 +222,7 @@ async function txSnapshotText(txParam, timeout = 9000) {
 }
 
 /** ifzq 的 JSON 接口：fetch 失败时加 &_var=NAME 走 JSONP（直接得到对象） */
-async function txJson(url, varName, timeout = 9000) {
+async function txJson(url, varName, timeout = NP.API_TIMEOUT_MS) {
   try {
     return JSON.parse(utf8(await request(url, { timeout })));
   } catch (firstErr) {
@@ -447,7 +496,7 @@ function parseSmartbox(raw) {
 // 已写入 v_hint 但还没轮到它的 onload 执行」之前就跑掉，导致两次搜索结果互相污染。
 // 串行化可彻底消除该竞态（搜索本就低频/防抖，串行开销可忽略）。
 let sbLock = Promise.resolve();
-function jsonpSuggest(keyword, timeout = 4000) {
+function jsonpSuggest(keyword, timeout = NP.SUGGEST_TIMEOUT_MS) {
   const run = () => new Promise((resolve) => {
     if (typeof document === 'undefined') return resolve([]);
     const s = document.createElement('script');
@@ -789,23 +838,73 @@ function sma(arr, n) {
   return out;
 }
 
+/* ---------------------------------------------------------------------------
+ * 预热口径 —— 单一事实来源
+ * ---------------------------------------------------------------------------
+ * 统一约定：**所有指标保持数组长度 = 输入长度，预热期一律填 null**。
+ * 绝不 slice（切片会改变长度，导致指标序列与日期轴错位，图上每条线整体平移）。
+ *
+ * 各指标「首个有效下标」不同，由下表声明。这里是全项目唯一的约定声明处 ——
+ * 测试与渲染层都从这里读，不得在别处再写一遍数字。
+ *
+ * 实测依据：technicalindicators 的 calculate() 直接截掉前导值（数组变短），
+ * 用「输出长度差」反推 lookback（输入 80 根）：
+ *   ATR(14)    80 → 66   少 14  → 首个有效下标 14 = n
+ *   EMA(20)    80 → 61   少 19  → 首个有效下标 19 = n-1
+ *   RSI(14)    80 → 66   少 14  → 首个有效下标 14 = n
+ *   MACD.dif   80 → 55   少 25  → 首个有效下标 25 = slow-1
+ *   MACD.dea             少 33  → 首个有效下标 33 = slow-1 + signal-1
+ *
+ * ⚠️ 不存在「一律 n-1」的通式：EMA/SMA/BOLL/KDJ 是 n-1，ATR/RSI 是 n。
+ *    统一的是「填 null 这个约定」，不是「预热长度」。
+ * ------------------------------------------------------------------------- */
+const WARMUP_FIRST_INDEX = {
+  sma: (p) => p.n - 1,
+  ema: (p) => p.n - 1,
+  rsi: (p) => p.n,
+  atr: (p) => p.n,
+  kdj: (p) => p.n - 1,
+  boll: (p) => p.n - 1,
+  macdDif: (p) => p.slow - 1,
+  macdDea: (p) => p.slow - 1 + p.signal - 1,
+};
+
+/**
+ * EMA —— TA-Lib 口径。
+ * 预热期填 null，首个有效值落在下标 n-1，用「前 n 个值的简单均值」作种子
+ * （不是用 arr[0] 作种子 —— 那会让全部后续值带上初始偏移）。
+ * 支持输入含前导 null（MACD 的 DEA 需要对 dif 求 EMA）。
+ */
 function ema(arr, n) {
   const out = new Array(arr.length).fill(null);
+  if (!(n > 0) || arr.length < n) return out;
   const k = 2 / (n + 1);
-  let prev = null;
-  for (let i = 0; i < arr.length; i++) {
-    prev = prev == null ? arr[i] : arr[i] * k + prev * (1 - k);
+  /* 跳过前导 null，找到第一段连续 n 个非空值 */
+  let start = 0;
+  while (start + n <= arr.length && arr.slice(start, start + n).some((v) => v == null)) start++;
+  if (start + n > arr.length) return out;
+  let prev = arr.slice(start, start + n).reduce((s, v) => s + v, 0) / n;
+  out[start + n - 1] = prev;
+  for (let i = start + n; i < arr.length; i++) {
+    if (arr[i] == null) continue;
+    prev = arr[i] * k + prev * (1 - k);
     out[i] = prev;
   }
   return out;
 }
 
-/** MACD(12,26,9) */
+/** MACD(12,26,9)
+ *  ⚠️ 三个序列必须与 closes **等长**，预热期填 null。
+ *     旧写法 `dif = closes.map(...).filter(x => x != null)` 是错的：
+ *     它压缩数组、丢掉下标信息，dif[0] 实际对应 closes[25]。
+ *     过去之所以没暴露，是因为 ema() 当时没有预热、从不产生 null，
+ *     于是 filter 恰好是个空操作。一旦给 ema() 补上预热，filter 立刻生效，
+ *     dif 会被压到 275 根 —— 对齐当场崩掉。所以二者必须同时改。 */
 function macd(closes, fast = 12, slow = 26, signal = 9) {
   const ef = ema(closes, fast), es = ema(closes, slow);
-  const dif = closes.map((_, i) => (ef[i] != null && es[i] != null ? ef[i] - es[i] : null)).filter((x) => x != null);
+  const dif = closes.map((_, i) => (ef[i] != null && es[i] != null ? ef[i] - es[i] : null));
   const dea = ema(dif, signal);
-  const hist = dif.map((d, i) => (dea[i] != null ? (d - dea[i]) * 2 : null));
+  const hist = dif.map((d, i) => (d != null && dea[i] != null ? (d - dea[i]) * 2 : null));
   return { dif, dea, hist };
 }
 
@@ -858,17 +957,24 @@ function boll(closes, n = 20, k = 2) {
   return { mid, up, dn };
 }
 
-/** ATR(14) */
+/** ATR(14) —— TA-Lib 口径
+ *  首个有效值落在下标 n（= n 个 TR 的等权均值），之后进入 Wilder 递推。
+ *  旧写法从下标 1 起就输出：out[1] 只用 1 个 TR 求均值，那只是当日振幅，
+ *  不是「平均真实波幅」；out[2] 用 2 个……每个早期值的窗口长度都不同，
+ *  且都未收敛。这类值画到图上是误导，且无法与外部 oracle 对拍。 */
 function atr(highs, lows, closes, n = 14) {
-  const tr = [null];
+  const out = new Array(closes.length).fill(null);
+  if (closes.length < n + 1) return out;   // 数据不足以完成预热
+  const tr = [null];                       // tr[0] 无前收，不参与
   for (let i = 1; i < closes.length; i++) {
     tr.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])));
   }
-  const out = new Array(closes.length).fill(null);
-  let prev = null;
-  for (let i = 1; i < tr.length; i++) {
-    if (i < n) { prev = tr.slice(1, i + 1).reduce((s, x) => s + x, 0) / i; }
-    else prev = (prev * (n - 1) + tr[i]) / n;
+  let prev = 0;
+  for (let i = 1; i <= n; i++) prev += tr[i];
+  prev /= n;
+  out[n] = prev;
+  for (let i = n + 1; i < closes.length; i++) {
+    prev = (prev * (n - 1) + tr[i]) / n;
     out[i] = prev;
   }
   return out;
@@ -1141,7 +1247,7 @@ function computeIndicators(kline, quote) {
   return out;
 }
 
-module.exports = { sma, ema, macd, rsi, kdj, boll, atr, computeIndicators, keyLevels, regressionChannel, donchian, bollState, channelVerdict, round };
+module.exports = { sma, ema, macd, rsi, kdj, boll, atr, computeIndicators, keyLevels, regressionChannel, donchian, bollState, channelVerdict, round, WARMUP_FIRST_INDEX };
 
 });
 

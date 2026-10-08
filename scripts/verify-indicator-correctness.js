@@ -176,42 +176,27 @@ function cmpScalar(a, b, tol, label) {
     t('KDJ.J 与参考一致', cj.ok, cj.ok ? '' : cj.why);
   }
 
-  /* A7 ATR —— 两种预热期口径都要查：
-   *     ① 与生产的 'fill' 口径对拍 → 数值必须一致（这才是"算错没有"）
-   *     ② 与严格的 'null' 口径对比 → 差异应被**显式登记**，而不是靠放宽容差蒙混
-   * 这个差异是真实发现的：生产把前 n−1 个点也标为 ATR(14)，
-   * 但它们实际是 ATR(1)~ATR(13)。属口径失真，非数值错误。 */
+  /* A7 ATR —— 预热口径已决策（2026-10-08）：采用严格 'null' 口径。
+   *     ① 与参考的 'null' 口径对拍 → 数值必须一致（这才是"算错没有"）
+   *     ② 与 'fill' 口径对比 → 量化"我们放弃了什么"，打印出来而不是静默吞掉
+   *
+   * 决策依据（实测，非查文档）：external 锚定库把输入 60 根截断成 46 根，
+   * 用「输出长度差」反推 ATR(14) 的 lookback = 14 —— 即首个有效下标是 n，不是 n-1。
+   * 因此"i < period - 1 填 null"这个直觉写法对 ATR 是错的（会少填一位）。 */
   {
     const prod = tech.atr(highs, lows, closes, 14);
-    const rFill = ref.atr(highs, lows, closes, 14, { warmup: 'fill' });
-    const cFill = cmpSeries(prod, rFill, 1e-6, 'ATR14(fill)');
-    t('ATR14 与参考实现一致（同为 fill 口径）', cFill.ok,
-      cFill.ok ? '' : cFill.why + (cFill.maxDiff != null ? ' 最大差 ' + cFill.maxDiff : ''));
-
-    /* 口径差异量化：预热期有多少点、首点差多少 */
     const rNull = ref.atr(highs, lows, closes, 14, { warmup: 'null' });
-    let warmupPoints = 0, firstDiff = null;
-    for (let i = 0; i < prod.length; i++) {
-      const pn = prod[i] == null, rn = rNull[i] == null;
-      if (pn !== rn) { warmupPoints++; if (firstDiff == null) firstDiff = i; }
+    const cNull = cmpSeries(prod, rNull, 1e-6, 'ATR14(null)');
+    t('ATR14 与参考实现一致（同为 null 口径）', cNull.ok,
+      cNull.ok ? '' : cNull.why + (cNull.maxDiff != null ? ' 最大差 ' + cNull.maxDiff : ''));
+
+    const rFill = ref.atr(highs, lows, closes, 14, { warmup: 'fill' });
+    let extra = 0, firstExtra = null;
+    for (let i = 0; i < rFill.length; i++) {
+      if (rFill[i] != null && rNull[i] == null) { extra++; if (firstExtra == null) firstExtra = i; }
     }
-    if (warmupPoints > 0) {
-      console.log('     ⚠ 口径差异（已登记）：生产 fill 口径在预热期多产出 ' + warmupPoints
-        + ' 个点（i=' + firstDiff + ' 起），这些点的实际窗口 < 14，却共用 "ATR(14)" 标签');
-      console.log('       影响：图上预热段 ATR 偏低（窗口小→波动估计偏小）。'
-        + '实际取 last(atr) 用于止损宽度时不受影响；但若有人读序列中段，会被误导');
-      console.log('       处置建议：或改生产为 null 口径（图上晚 13 根出现），'
-        + '或在溯源信封里把 window 标为 {nominal:14, warmup:"partial"}');
-      KNOWN_DIVERGENCES.push({
-        indicator: 'ATR',
-        kind: 'WARMUP_CONVENTION',
-        production: 'fill（预热期用部分窗口均值）',
-        reference: 'null（预热期留空）',
-        affectedPoints: warmupPoints,
-        numericMatch: cFill.ok,
-        verdict: '口径差异，非数值错误',
-      });
-    }
+    console.log('     已放弃的 fill 口径本会多产出 ' + extra + ' 个点（i=' + firstExtra
+      + ' 起，窗口 < 14 却共用 "ATR(14)" 标签）—— 按决策不再产出');
   }
 
   /* A8 唐奇安 */
@@ -231,6 +216,31 @@ function cmpScalar(a, b, tol, label) {
 
   const ind = a.ind;
   const finite = (x) => x == null || Number.isFinite(x);
+
+  /* B0 预热位置声明 == 实际输出
+   * ------------------------------------------------------------------
+   * lib/tech.js 导出的 WARMUP_FIRST_INDEX 是全项目唯一的预热约定声明处。
+   * 但"声明"和"实现"是两处代码，天然会漂移 —— 有人在 ema() 里改了下标、
+   * 却忘了改声明表，两边就各说各话，而没有任何一处会报错。
+   * 这里直接测实际输出的首个非空下标，与声明值逐一比对，把二者焊死。 */
+  {
+    const firstIdx = (arr) => (Array.isArray(arr) ? arr.findIndex((x) => x != null) : -1);
+    const W = tech.WARMUP_FIRST_INDEX;
+    const checks = [
+      ['sma.20',  firstIdx(tech.sma(closes, 20)),                  W.sma({ n: 20 })],
+      ['ema.20',  firstIdx(tech.ema(closes, 20)),                  W.ema({ n: 20 })],
+      ['rsi.14',  firstIdx(tech.rsi(closes, 14)),                  W.rsi({ n: 14 })],
+      ['atr.14',  firstIdx(tech.atr(highs, lows, closes, 14)),     W.atr({ n: 14 })],
+      ['kdj.k',   firstIdx(tech.kdj(highs, lows, closes, 9).k),    W.kdj({ n: 9 })],
+      ['boll.mid', firstIdx(tech.boll(closes, 20, 2).mid),         W.boll({ n: 20 })],
+      ['macd.dif', firstIdx(tech.macd(closes).dif),                W.macdDif({ slow: 26 })],
+      ['macd.dea', firstIdx(tech.macd(closes).dea),                W.macdDea({ slow: 26, signal: 9 })],
+    ];
+    checks.forEach(([name, actual, declared]) => {
+      t('预热位置 ' + name + ' 首个有效下标 == 声明值 ' + declared,
+        actual === declared, actual === declared ? '' : '实际 ' + actual + ' ≠ 声明 ' + declared);
+    });
+  }
 
   /* B1 布林三轨次序：up >= mid >= dn（恒等式，不允许例外） */
   {
