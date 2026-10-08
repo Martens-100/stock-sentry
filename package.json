@@ -7,9 +7,15 @@
     "start": "node server.js",
     "build:static": "node build-static.js",
     "check:secrets": "node scripts/scan-secrets.js",
-    "check": "node scripts/scan-secrets.js && node build-static.js",
+    "check": "node scripts/scan-secrets.js && node scripts/verify-provenance-selftest.js && node scripts/verify-provenance-contract.js --ratchet && node scripts/verify-indicator-correctness.js && node build-static.js",
     "verify:browser": "node scripts/verify-browser-path.js",
-    "verify:ui": "node scripts/verify-ui-dom.js"
+    "verify:ui": "node scripts/verify-ui-dom.js",
+    "verify:provenance": "node scripts/verify-provenance-contract.js --ratchet",
+    "verify:provenance:strict": "node scripts/verify-provenance-contract.js",
+    "verify:provenance-selftest": "node scripts/verify-provenance-selftest.js",
+    "verify:indicator-correctness": "node scripts/verify-indicator-correctness.js",
+    "verify:oracle": "node scripts/verify-oracle-anchoring.js",
+    "verify:all": "node scripts/scan-secrets.js && node scripts/verify-provenance-selftest.js && node scripts/verify-provenance-contract.js --ratchet && node scripts/verify-indicator-correctness.js && node scripts/verify-oracle-anchoring.js && node build-static.js"
   },
   "keywords": [
     "a-share",
@@ -25,5 +31,9 @@
   },
   "license": "MIT",
   "private": false,
-  "dependencies": {}
+  "dependencies": {},
+  "devDependencies": {
+    "technicalindicators": "^3.1.0"
+  },
+  "_note_devDependencies": "technicalindicators 仅用于 scripts/verify-oracle-anchoring.js 的外部锚定对拍，不参与构建、不进入 docs/ 产物。运行时的零第三方依赖设计保持不变。"
 }

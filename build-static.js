@@ -23,6 +23,7 @@ const OUT = path.join(ROOT, 'docs');
  */
 const MODULES = [
   ['source', 'lib/source.js'],
+  ['provenance', 'lib/provenance.js'],
   ['tech', 'lib/tech.js'],
   ['monitors', 'lib/monitors.js'],
   ['portrait', 'lib/portrait.js'],

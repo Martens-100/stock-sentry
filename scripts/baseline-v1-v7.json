@@ -1,0 +1,100 @@
+{
+  "savedAt": "2026-10-08T12:14:29.315Z",
+  "gitHead": "a6c636e",
+  "method": "pixel",
+  "summary": {
+    "pass": 4,
+    "fail": 0,
+    "notImplemented": 3,
+    "skipped": 0
+  },
+  "pending": [
+    "V1",
+    "V2",
+    "V3"
+  ],
+  "pixels": {
+    "wide": [
+      {
+        "id": "minuteChart",
+        "w": 1088,
+        "h": 220,
+        "ink": 0.2627,
+        "nonUniform": true
+      },
+      {
+        "id": "klineChart",
+        "w": 1088,
+        "h": 380,
+        "ink": 0.2864,
+        "nonUniform": true
+      }
+    ],
+    "narrow": [
+      {
+        "id": "minuteChart",
+        "w": 298,
+        "h": 220,
+        "ink": 0.2186,
+        "nonUniform": true
+      },
+      {
+        "id": "klineChart",
+        "w": 298,
+        "h": 380,
+        "ink": 0.2643,
+        "nonUniform": true
+      }
+    ]
+  },
+  "note": [
+    "改造后的回归判据：新增图层**不得把原有图层的墨迹挤掉**。",
+    "即改造后各画布 ink 率应 >= 本基线值 × 0.9（允许 10% 浮动）。",
+    "若某画布 ink 掉到 0.001 以下，说明该图层被挤没了 —— 这是静默故障。",
+    "V1/V2/V3 落地后应转为 PASS，且 pending 列表清空。"
+  ],
+  "results": [
+    {
+      "id": "V1",
+      "name": "导轨外推数学正确性",
+      "status": "NOT_IMPLEMENTED",
+      "detail": "lib/tech.js 未见外推函数"
+    },
+    {
+      "id": "V2",
+      "name": "副图与主图 X 轴对齐",
+      "status": "NOT_IMPLEMENTED",
+      "detail": "public/app.js 未见副图绘制函数"
+    },
+    {
+      "id": "V3",
+      "name": "周期切换后指标口径正确",
+      "status": "NOT_IMPLEMENTED",
+      "detail": "source.js 支持 klt=是，但 app.js 未透传周/月周期"
+    },
+    {
+      "id": "V4",
+      "name": "图层开关组合下画布非空",
+      "status": "PASS",
+      "detail": "PASS(像素) 宽视口画布 2 个，有墨迹 2 个 | minuteChart(ink=0.2627) klineChart(ink=0.2864)"
+    },
+    {
+      "id": "V5",
+      "name": "窄视口不产生空图",
+      "status": "PASS",
+      "detail": "PASS(像素) 窄视口画布 2 个，有墨迹 2，提示语 未命中 | minuteChart(ink=0.2186) klineChart(ink=0.2643)"
+    },
+    {
+      "id": "V6",
+      "name": "静态版与源码一致",
+      "status": "PASS",
+      "detail": "bundle 含全部 4 个指标锚点"
+    },
+    {
+      "id": "V7",
+      "name": "密钥扫描通过",
+      "status": "PASS",
+      "detail": "退出码 0"
+    }
+  ]
+}
